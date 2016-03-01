@@ -77,6 +77,7 @@ static struct page *alloc_buffer_page(struct ion_system_heap *heap,
 				      unsigned long order)
 {
 	bool cached = ion_buffer_cached(buffer);
+	bool split_pages = ion_buffer_fault_user_mappings(buffer);
 	struct ion_page_pool *pool = heap->pools[order_to_index(order)];
 	struct page *page;
 
@@ -87,7 +88,7 @@ static struct page *alloc_buffer_page(struct ion_system_heap *heap,
 
 		if (order > 4)
 			gfp_flags = high_order_gfp_flags;
-		page = ion_heap_alloc_pages(buffer, gfp_flags, order);
+		page = alloc_pages(gfp_flags, order);
 		if (!page)
 			return 0;
 		arm_dma_ops.sync_single_for_device(NULL,
@@ -97,6 +98,8 @@ static struct page *alloc_buffer_page(struct ion_system_heap *heap,
 	if (!page)
 		return 0;
 
+	if (split_pages)
+		split_page(page, order);
 	return page;
 }
 
@@ -169,6 +172,7 @@ static int ion_system_heap_allocate(struct ion_heap *heap,
 	int i = 0;
 	long size_remaining = PAGE_ALIGN(size);
 	unsigned int max_order = orders[0];
+	bool split_pages = ion_buffer_fault_user_mappings(buffer);
 
 	INIT_LIST_HEAD(&pages);
 	while (size_remaining > 0) {
@@ -185,15 +189,28 @@ static int ion_system_heap_allocate(struct ion_heap *heap,
 	if (!table)
 		goto err;
 
-	ret = sg_alloc_table(table, i, GFP_KERNEL);
+	if (split_pages)
+		ret = sg_alloc_table(table, PAGE_ALIGN(size) / PAGE_SIZE,
+				     GFP_KERNEL);
+	else
+		ret = sg_alloc_table(table, i, GFP_KERNEL);
+
 	if (ret)
 		goto err1;
 
 	sg = table->sgl;
 	list_for_each_entry_safe(info, tmp_info, &pages, list) {
 		struct page *page = info->page;
-		sg_set_page(sg, page, (1 << info->order) * PAGE_SIZE, 0);
-		sg = sg_next(sg);
+		if (split_pages) {
+			for (i = 0; i < (1 << info->order); i++) {
+				sg_set_page(sg, page + i, PAGE_SIZE, 0);
+				sg = sg_next(sg);
+			}
+		} else {
+			sg_set_page(sg, page, (1 << info->order) * PAGE_SIZE,
+				    0);
+			sg = sg_next(sg);
+		}
 		list_del(&info->list);
 		kfree(info);
 	}
