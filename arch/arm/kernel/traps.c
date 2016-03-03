@@ -47,13 +47,7 @@ static int __init logstart(void)
 subsys_initcall(logstart);
 #endif
 
-static const char *handler[]= {
-	"prefetch abort",
-	"data abort",
-	"address exception",
-	"interrupt",
-	"undefined instruction",
-};
+static const char *handler[]= { "prefetch abort", "data abort", "address exception", "interrupt" };
 
 void *vectors_page;
 

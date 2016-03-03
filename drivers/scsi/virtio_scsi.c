@@ -957,10 +957,6 @@ static void virtscsi_remove(struct virtio_device *vdev)
 #ifdef CONFIG_PM
 static int virtscsi_freeze(struct virtio_device *vdev)
 {
-	struct Scsi_Host *sh = virtio_scsi_host(vdev);
-	struct virtio_scsi *vscsi = shost_priv(sh);
-
-	unregister_hotcpu_notifier(&vscsi->nb);
 	virtscsi_remove_vqs(vdev);
 	return 0;
 }
@@ -969,17 +965,8 @@ static int virtscsi_restore(struct virtio_device *vdev)
 {
 	struct Scsi_Host *sh = virtio_scsi_host(vdev);
 	struct virtio_scsi *vscsi = shost_priv(sh);
-	int err;
 
-	err = virtscsi_init(vdev, vscsi);
-	if (err)
-		return err;
-
-	err = register_hotcpu_notifier(&vscsi->nb);
-	if (err)
-		vdev->config->del_vqs(vdev);
-
-	return err;
+	return virtscsi_init(vdev, vscsi);
 }
 #endif
 

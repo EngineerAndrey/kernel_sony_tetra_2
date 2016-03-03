@@ -145,6 +145,7 @@ struct ceph_osd_request {
 	s32               r_reply_op_result[CEPH_OSD_MAX_OP];
 	int               r_got_reply;
 	int		  r_linger;
+	int		  r_completed;
 
 	struct ceph_osd_client *r_osdc;
 	struct kref       r_kref;
@@ -334,8 +335,6 @@ extern int ceph_osdc_start_request(struct ceph_osd_client *osdc,
 extern int ceph_osdc_wait_request(struct ceph_osd_client *osdc,
 				  struct ceph_osd_request *req);
 extern void ceph_osdc_sync(struct ceph_osd_client *osdc);
-
-extern void ceph_osdc_flush_notifies(struct ceph_osd_client *osdc);
 
 extern int ceph_osdc_readpages(struct ceph_osd_client *osdc,
 			       struct ceph_vino vino,
