@@ -135,7 +135,7 @@ struct usb_hub *usb_hub_to_struct_hub(struct usb_device *hdev)
 	return usb_get_intfdata(hdev->actconfig->interface[0]);
 }
 
-static int usb_device_supports_lpm(struct usb_device *udev)
+int usb_device_supports_lpm(struct usb_device *udev)
 {
 	/* USB 2.1 (and greater) devices indicate LPM support through
 	 * their USB 2.0 Extended Capabilities BOS descriptor.
@@ -156,6 +156,11 @@ static int usb_device_supports_lpm(struct usb_device *udev)
 				"Power management will be impacted.\n");
 		return 0;
 	}
+
+	/* udev is root hub */
+	if (!udev->parent)
+		return 1;
+
 	if (udev->parent->lpm_capable)
 		return 1;
 
@@ -1604,7 +1609,7 @@ static void hub_disconnect(struct usb_interface *intf)
 {
 	struct usb_hub *hub = usb_get_intfdata(intf);
 	struct usb_device *hdev = interface_to_usbdev(intf);
-	int port1;
+	int i;
 
 	/* Take the hub off the event list and don't let it be added again */
 	spin_lock_irq(&hub_event_lock);
@@ -1619,15 +1624,11 @@ static void hub_disconnect(struct usb_interface *intf)
 	hub->error = 0;
 	hub_quiesce(hub, HUB_DISCONNECT);
 
-	/* Avoid races with recursively_mark_NOTATTACHED() */
-	spin_lock_irq(&device_state_lock);
-	port1 = hdev->maxchild;
-	hdev->maxchild = 0;
-	usb_set_intfdata(intf, NULL);
-	spin_unlock_irq(&device_state_lock);
+	usb_set_intfdata (intf, NULL);
 
-	for (; port1 > 0; --port1)
-		usb_hub_remove_port_device(hub, port1);
+	for (i = 0; i < hdev->maxchild; i++)
+		usb_hub_remove_port_device(hub, i + 1);
+	hub->hdev->maxchild = 0;
 
 	if (hub->hdev->speed == USB_SPEED_HIGH)
 		highspeed_hubs--;
@@ -2230,13 +2231,18 @@ static int usb_enumerate_device(struct usb_device *udev)
 			return err;
 		}
 	}
-
-	/* read the standard strings and cache them if present */
-	udev->product = usb_cache_string(udev, udev->descriptor.iProduct);
-	udev->manufacturer = usb_cache_string(udev,
-					      udev->descriptor.iManufacturer);
-	udev->serial = usb_cache_string(udev, udev->descriptor.iSerialNumber);
-
+	if (udev->wusb == 1 && udev->authorized == 0) {
+		udev->product = kstrdup("n/a (unauthorized)", GFP_KERNEL);
+		udev->manufacturer = kstrdup("n/a (unauthorized)", GFP_KERNEL);
+		udev->serial = kstrdup("n/a (unauthorized)", GFP_KERNEL);
+	}
+	else {
+		/* read the standard strings and cache them if present */
+		udev->product = usb_cache_string(udev, udev->descriptor.iProduct);
+		udev->manufacturer = usb_cache_string(udev,
+						      udev->descriptor.iManufacturer);
+		udev->serial = usb_cache_string(udev, udev->descriptor.iSerialNumber);
+	}
 	err = usb_enumerate_device_otg(udev);
 	if (err < 0)
 		return err;
@@ -2415,6 +2421,16 @@ int usb_deauthorize_device(struct usb_device *usb_dev)
 	usb_dev->authorized = 0;
 	usb_set_configuration(usb_dev, -1);
 
+	kfree(usb_dev->product);
+	usb_dev->product = kstrdup("n/a (unauthorized)", GFP_KERNEL);
+	kfree(usb_dev->manufacturer);
+	usb_dev->manufacturer = kstrdup("n/a (unauthorized)", GFP_KERNEL);
+	kfree(usb_dev->serial);
+	usb_dev->serial = kstrdup("n/a (unauthorized)", GFP_KERNEL);
+
+	usb_destroy_configuration(usb_dev);
+	usb_dev->descriptor.bNumConfigurations = 0;
+
 out_unauthorized:
 	usb_unlock_device(usb_dev);
 	return 0;
@@ -2442,7 +2458,17 @@ int usb_authorize_device(struct usb_device *usb_dev)
 		goto error_device_descriptor;
 	}
 
+	kfree(usb_dev->product);
+	usb_dev->product = NULL;
+	kfree(usb_dev->manufacturer);
+	usb_dev->manufacturer = NULL;
+	kfree(usb_dev->serial);
+	usb_dev->serial = NULL;
+
 	usb_dev->authorized = 1;
+	result = usb_enumerate_device(usb_dev);
+	if (result < 0)
+		goto error_enumerate;
 	/* Choose and set the configuration.  This registers the interfaces
 	 * with the driver core and lets interface drivers bind to them.
 	 */
@@ -2458,6 +2484,7 @@ int usb_authorize_device(struct usb_device *usb_dev)
 	}
 	dev_info(&usb_dev->dev, "authorized to connect\n");
 
+error_enumerate:
 error_device_descriptor:
 	usb_autosuspend_device(usb_dev);
 error_autoresume:
@@ -4789,9 +4816,8 @@ static void hub_events(void)
 					hub->ports[i - 1]->child;
 
 				dev_dbg(hub_dev, "warm reset port %d\n", i);
-				if (!udev ||
-				    !(portstatus & USB_PORT_STAT_CONNECTION) ||
-				    udev->state == USB_STATE_NOTATTACHED) {
+				if (!udev || !(portstatus &
+						USB_PORT_STAT_CONNECTION)) {
 					status = hub_port_reset(hub, i,
 							NULL, HUB_BH_RESET_TIME,
 							true);
@@ -5260,11 +5286,10 @@ int usb_reset_device(struct usb_device *udev)
 				else if (cintf->condition ==
 						USB_INTERFACE_BOUND)
 					rebind = 1;
-				if (rebind)
-					cintf->needs_binding = 1;
 			}
+			if (ret == 0 && rebind)
+				usb_rebind_intf(cintf);
 		}
-		usb_unbind_and_rebind_marked_interfaces(udev);
 	}
 
 	usb_autosuspend_device(udev);

@@ -67,6 +67,7 @@ static int vmbus_negotiate_version(struct vmbus_channel_msginfo *msginfo,
 	int ret = 0;
 	struct vmbus_channel_initiate_contact *msg;
 	unsigned long flags;
+	int t;
 
 	init_completion(&msginfo->waitevent);
 
@@ -101,7 +102,15 @@ static int vmbus_negotiate_version(struct vmbus_channel_msginfo *msginfo,
 	}
 
 	/* Wait for the connection response */
-	wait_for_completion(&msginfo->waitevent);
+	t =  wait_for_completion_timeout(&msginfo->waitevent, 5*HZ);
+	if (t == 0) {
+		spin_lock_irqsave(&vmbus_connection.channelmsg_lock,
+				flags);
+		list_del(&msginfo->msglistentry);
+		spin_unlock_irqrestore(&vmbus_connection.channelmsg_lock,
+					flags);
+		return -ETIMEDOUT;
+	}
 
 	spin_lock_irqsave(&vmbus_connection.channelmsg_lock, flags);
 	list_del(&msginfo->msglistentry);

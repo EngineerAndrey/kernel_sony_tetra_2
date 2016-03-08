@@ -69,6 +69,14 @@ static u64 of_bus_default_map(__be32 *addr, const __be32 *range,
 		 (unsigned long long)cp, (unsigned long long)s,
 		 (unsigned long long)da);
 
+	/*
+	 * If the number of address cells is larger than 2 we assume the
+	 * mapping doesn't specify a physical address. Rather, the address
+	 * specifies an identifier that must match exactly.
+	 */
+	if (na > 2 && memcmp(range, addr, na * 4) != 0)
+		return OF_BAD_ADDR;
+
 	if (da < cp || da >= (cp + s))
 		return OF_BAD_ADDR;
 	return da - cp;
@@ -99,12 +107,11 @@ static unsigned int of_bus_default_get_flags(const __be32 *addr)
 static int of_bus_pci_match(struct device_node *np)
 {
 	/*
- 	 * "pciex" is PCI Express
 	 * "vci" is for the /chaos bridge on 1st-gen PCI powermacs
 	 * "ht" is hypertransport
 	 */
-	return !strcmp(np->type, "pci") || !strcmp(np->type, "pciex") ||
-		!strcmp(np->type, "vci") || !strcmp(np->type, "ht");
+	return !strcmp(np->type, "pci") || !strcmp(np->type, "vci") ||
+		!strcmp(np->type, "ht");
 }
 
 static void of_bus_pci_count_cells(struct device_node *np,
@@ -616,10 +623,10 @@ struct device_node *of_find_matching_node_by_address(struct device_node *from,
 	struct resource res;
 
 	while (dn) {
-		if (of_address_to_resource(dn, 0, &res))
-			continue;
-		if (res.start == base_address)
+		if (!of_address_to_resource(dn, 0, &res) &&
+		    res.start == base_address)
 			return dn;
+
 		dn = of_find_matching_node(dn, matches);
 	}
 

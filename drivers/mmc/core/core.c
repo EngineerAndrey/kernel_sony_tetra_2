@@ -333,8 +333,10 @@ static void mmc_wait_data_done(struct mmc_request *mrq)
 	unsigned long flags;
 
 	local_irq_save(flags);
-	mrq->host->context_info.is_done_rcv = true;
-	wake_up_interruptible(&mrq->host->context_info.wait);
+	struct mmc_context_info *context_info = &mrq->host->context_info;
+
+	context_info->is_done_rcv = true;
+	wake_up_interruptible(&context_info->wait);
 	local_irq_restore(flags);
 }
 
