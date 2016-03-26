@@ -345,7 +345,7 @@ CHECKFLAGS     := -D__linux__ -Dlinux -D__STDC__ -Dunix -D__unix__ \
 CFLAGS_MODULE   =
 AFLAGS_MODULE   =
 LDFLAGS_MODULE  =
-CFLAGS_KERNEL	=
+CFLAGS_KERNEL	= 
 AFLAGS_KERNEL	=
 CFLAGS_GCOV	= -fprofile-arcs -ftest-coverage
 
@@ -575,8 +575,7 @@ all: vmlinux
 ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS	+= -Os $(call cc-disable-warning,maybe-uninitialized,)
 else
-KBUILD_CFLAGS	+= -O2 -fmodulo-sched -fmodulo-sched-allow-regmoves -funswitch-loops -fgcse-after-reload -march=armv7-a -mtune=cortex-a7 -mfloat-abi=hard -mfpu=neon-vfpv4 -Wno-unused-variable -Wno-unused -funsafe-math-optimizations -ftree-vectorize -fno-delete-null-pointer-checks -mvectorize-with-neon-quad -fsingle-precision-constant -fgcse-sm -fgcse-las -fivopts \
-		   -fsched-spec-load -fforce-addr
+KBUILD_CFLAGS	+= -O2 -fmodulo-sched -fmodulo-sched-allow-regmoves -funswitch-loops -fgcse-after-reload -march=armv7-a -mtune=cortex-a7 -mfloat-abi=hard -mfpu=neon-vfpv4 -Wno-unused-variable -Wno-unused -funsafe-math-optimizations -ftree-vectorize -fno-delete-null-pointer-checks -mvectorize-with-neon-quad -fsingle-precision-constant -fgcse-sm -fgcse-las -fivopts -fsched-spec-load -fforce-addr
 endif
 
 include $(srctree)/arch/$(SRCARCH)/Makefile
