@@ -576,7 +576,7 @@ ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS	+= -Os $(call cc-disable-warning,maybe-uninitialized,)
 else
 KBUILD_CFLAGS	+= -O2 -fmodulo-sched -fmodulo-sched-allow-regmoves -funswitch-loops -fgcse-after-reload -march=armv7-a -mtune=cortex-a7 -mfloat-abi=hard -mfpu=neon-vfpv4 -Wno-unused-variable -Wno-unused -funsafe-math-optimizations -ftree-vectorize -fno-delete-null-pointer-checks -mvectorize-with-neon-quad -fsingle-precision-constant -fgcse-sm -fgcse-las -fivopts \
-		   -fgraphite-identity -floop-parallelize-all -ftree-loop-linear -floop-interchange -floop-strip-mine -floop-block -ftree-loop-distribution -ftree-parallelize-loops=4 -fsched-spec-load -fforce-addr
+		   -fsched-spec-load -fforce-addr
 endif
 
 include $(srctree)/arch/$(SRCARCH)/Makefile
