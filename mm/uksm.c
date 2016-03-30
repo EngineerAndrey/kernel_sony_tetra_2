@@ -2680,7 +2680,7 @@ out:
  * to the next pass of ksmd - consider, for example, how ksmd might be
  * in cmp_and_merge_page on one of the rmap_items we would be removing.
  */
-static inline int unmerge_uksm_pages(struct vm_area_struct *vma,
+inline int unmerge_uksm_pages(struct vm_area_struct *vma,
 		      unsigned long start, unsigned long end)
 {
 	unsigned long addr;
