@@ -13,6 +13,7 @@
 #include <linux/gpio.h>
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
+#include <linux/irq.h>
 #include <linux/kernel.h>
 #include <linux/ktime.h>
 #include <linux/miscdevice.h>
@@ -1659,6 +1660,8 @@ static irqreturn_t em718x_irq_handler(int irq, void *handle)
 	struct hub_all_data data;
 	bool one_read;
 
+	set_cpus_allowed_ptr(current, cpumask_of(1));
+
 	mutex_lock(&em718x->lock);
 
 	em718x->irq_time = ktime_to_ns(ktime_get_boottime());
@@ -2272,6 +2275,7 @@ static int em718x_probe(struct i2c_client *client,
 	int rc;
 	struct em718x *em718x;
 	struct device *dev = &client->dev;
+	struct irq_desc *desc;
 	int i;
 
 	rc = i2c_check_functionality(client->adapter, I2C_FUNC_I2C);
@@ -2385,6 +2389,10 @@ static int em718x_probe(struct i2c_client *client,
 				em718x->irq);
 		goto exit_misc;
 	}
+
+	desc = irq_to_desc(em718x->irq);
+	set_cpus_allowed_ptr(desc->action->thread, cpumask_of(1));
+
 	device_init_wakeup(dev, 1);
 	dev_info(dev, "init finished with no errors, make reset to load FW\n");
 
