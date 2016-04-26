@@ -29,7 +29,7 @@
 #endif
 
 #define MAX_ACTIVE_STATE	4
-#define ACLD_MAX_WAIT_COUNT	10
+#define COOLANT_MAX_WAIT_COUNT	5
 #define TRIM_MARGIN_0		0
 
 #ifdef DEBUG
@@ -75,8 +75,8 @@ struct bcmpmu_cc_data {
 	int chrgr_trim_reg_sz;
 	bool is_charging;
 	bool charging_halted;/*to know whether this module disabled charging*/
-	bool acld_algo_finished;
-	u8 acld_wait_count;
+	bool coolant_can_run;
+	u8 coolant_wait_count;
 	long curr_state;
 	long coolant_off_state;
 	long max_state;
@@ -240,22 +240,22 @@ static void bcmpmu_coolant_work(struct work_struct *work)
 		container_of(work, struct bcmpmu_cc_data, coolant_work.work);
 
 	pr_ccool(FLOW, "%s\n", __func__);
-	if (!cdata->acld_algo_finished) {
-		if (cdata->acld_wait_count >= ACLD_MAX_WAIT_COUNT) {
+	if (!cdata->coolant_can_run) {
+		if (cdata->coolant_wait_count >= COOLANT_MAX_WAIT_COUNT) {
 			/* No Event from ACLD,
 			 * so Forcefully set ACLD as finished*/
-			pr_ccool(FLOW, "No ACLD FINISH event\n");
-			cdata->acld_algo_finished = true;
-			cdata->acld_wait_count = 0;
+			pr_ccool(FLOW, "Coolant can Run Now\n");
+			cdata->coolant_can_run = true;
+			cdata->coolant_wait_count = 0;
 		} else {
-			pr_ccool(FLOW, "Waiting for ACLD FINISH event\n");
-			cdata->acld_wait_count++;
+			pr_ccool(FLOW, "Waiting coolant_can_run event\n");
+			cdata->coolant_wait_count++;
 			queue_delayed_work(cdata->coolant_wq,
 				&cdata->coolant_work, msecs_to_jiffies
 					(cdata->pdata->coolant_poll_time));
 		}
 	}
-	if (cdata->acld_algo_finished)
+	if (cdata->coolant_can_run)
 		bcmpmu_coolant_set_optimal_curr(cdata, cdata->curr_state);
 }
 
@@ -295,7 +295,7 @@ static int bcmpmu_ccoolant_set_cur_state(struct thermal_cooling_device *cdev,
 
 	cdata->curr_state = state;
 	if ((cdata->is_charging || cdata->charging_halted) &&
-					cdata->acld_algo_finished) {
+					cdata->coolant_can_run) {
 		pr_ccool(VERBOSE, "%s called, state:%lu\tcurr = %u\n",
 			__func__, state, cdata->ccs->states[state]);
 		bcmpmu_coolant_set_optimal_curr(cdata, state);
@@ -322,26 +322,23 @@ static int bcmpmu_chrgr_coolant_event_handler(struct notifier_block *nb,
 		if (cdata->chrgr_type == PMU_CHRGR_TYPE_NONE) {
 			pr_ccool(FLOW, "%s:Charger Removed\n", __func__);
 			cancel_delayed_work_sync(&cdata->coolant_work);
-			cdata->acld_algo_finished = false;
+			cdata->coolant_can_run = false;
 			cdata->charging_halted = false;
 			cdata->dietemp_coolant_running = false;
-			cdata->acld_wait_count = 0;
+			cdata->coolant_wait_count = 0;
 		} else {
 			pr_ccool(FLOW, "%s:Charger Connected\n", __func__);
-			if (!bcmpmu_is_acld_supported
-					(cdata->bcmpmu, cdata->chrgr_type)) {
-				cdata->acld_algo_finished = true;
-			}
+			cdata->coolant_can_run = false;
 		}
 		break;
 	case PMU_ACLD_EVT_ACLD_STATUS:
 		enable = *(bool *)data;
 		cdata = container_of(nb, struct bcmpmu_cc_data, acld_nb);
 		if (enable) {
-			cdata->acld_algo_finished = false;
+			cdata->coolant_can_run = false;
 			pr_ccool(FLOW, "%s:ACLD algo START Event Received\n",
 						__func__);
-			cdata->acld_wait_count = 0;
+			cdata->coolant_wait_count = 0;
 			/*For SDP, charging current is not set by ACLD algo
 			 * Charging enable event will execute coolant work */
 			if (cdata->chrgr_type == PMU_CHRGR_TYPE_SDP)
@@ -350,7 +347,7 @@ static int bcmpmu_chrgr_coolant_event_handler(struct notifier_block *nb,
 				&cdata->coolant_work, msecs_to_jiffies
 					(cdata->pdata->coolant_poll_time));
 		} else {
-			cdata->acld_algo_finished = true;
+			cdata->coolant_can_run = true;
 			pr_ccool(FLOW, "%s:ACLD algo FINISH Event Received\n",
 								__func__);
 			if (cdata->chrgr_type == PMU_CHRGR_TYPE_SDP)
@@ -375,7 +372,7 @@ static int bcmpmu_chrgr_coolant_event_handler(struct notifier_block *nb,
 			pr_ccool(FLOW,
 				"%s:Charging Disabled\n", __func__);
 			cancel_delayed_work_sync(&cdata->coolant_work);
-			cdata->acld_wait_count = 0;
+			cdata->coolant_wait_count = 0;
 			cdata->is_charging = false;
 		}
 		break;
@@ -441,7 +438,7 @@ static int bcmpmu_ccoolant_probe(struct platform_device *pdev)
 
 	cdata->ccs = &cdata->pdata->coolant_states[get_battery_type()];
 
-	cdata->acld_algo_finished = false;
+	cdata->coolant_can_run = false;
 	cdata->dietemp_coolant_running = false;
 	cdata->is_charging = false;
 	cdata->charging_halted = false;
