@@ -196,7 +196,8 @@ extern "C" {
 		Int32(*update) (DISPDRV_HANDLE_T handle, void *buff,
 			DISPDRV_WIN_t *p_win, DISPDRV_CB_T apiCb);
 		Int32(*reset_win) (DISPDRV_HANDLE_T handle);
-		void(*enable_send_first_frame_event) (DISPDRV_HANDLE_T handle);
+		void(*set_send_first_frame_event) (DISPDRV_HANDLE_T handle,
+							bool enable);
 	} DISPDRV_T;
 
 #ifdef __cplusplus

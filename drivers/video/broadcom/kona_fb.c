@@ -950,6 +950,7 @@ static void set_special_mode(struct kona_fb *fb) {
 							"mode\n");
 		link_control(fb, RESUME_LINK);
 	}
+	fb->display_ops->set_send_first_frame_event(fb->display_hdl, false);
 	kona_clock_start(fb);
 	if (fb->display_info->cabc_enabled)
 		panel_write(fb->display_info->cabc_off_seq);
@@ -1089,7 +1090,8 @@ static ssize_t kona_fb_panel_mode_store(struct device *dev,
 				msecs_to_jiffies(
 					fb->fb_data->esdcheck_period_ms));
 
-		fb->display_ops->enable_send_first_frame_event(fb->display_hdl);
+		fb->display_ops->set_send_first_frame_event(fb->display_hdl,
+									true);
 		fb->display_info->special_mode_on = false;
 		konafb_debug("Special mode OFF\n");
 	}

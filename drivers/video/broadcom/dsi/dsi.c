@@ -121,7 +121,7 @@ static Int32 DSI_Update(
 
 static Int32 DSI_WinReset(DISPDRV_HANDLE_T drvH);
 
-static void dsi_enable_send_first_frame_event(DISPDRV_HANDLE_T drvH);
+static void dsi_set_send_first_frame_event(DISPDRV_HANDLE_T drvH, bool enable);
 
 static int DSI_ReadReg(DISPDRV_HANDLE_T drvH, UInt8 reg, UInt8 *rxBuff);
 
@@ -147,7 +147,7 @@ static DISPDRV_T disp_drv_dsi = {
 	.update_no_os = &DSI_Atomic_Update,
 	.update = &DSI_Update,
 	.reset_win = &DSI_WinReset,
-	.enable_send_first_frame_event = &dsi_enable_send_first_frame_event,
+	.set_send_first_frame_event = &dsi_set_send_first_frame_event,
 };
 
 
@@ -432,11 +432,11 @@ static Int32 DSI_WinReset(DISPDRV_HANDLE_T drvH)
  * Call to this function is protected in kona_fb.c by update-mutex,
  * so there is no need to protect it here.
  */
-static void dsi_enable_send_first_frame_event(DISPDRV_HANDLE_T handle)
+static void dsi_set_send_first_frame_event(DISPDRV_HANDLE_T handle, bool enable)
 {
 	DispDrv_PANEL_t *panel = (DispDrv_PANEL_t *)handle;
 
-	panel->send_first_frame_event = true;
+	panel->send_first_frame_event = enable;
 }
 
 /*
