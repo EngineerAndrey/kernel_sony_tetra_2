@@ -320,7 +320,7 @@ struct sensor_event {
 	int64_t time;
 };
 
-#define ACC_EV_BUF_SIZE (FIFO_SIZE_MAX + FIFO_SIZE_MAX / 10)
+#define ACC_EV_BUF_SIZE (FIFO_SIZE_MAX + FIFO_SIZE_MAX)
 #define GYRO_EV_BUF_SIZE 16
 #define MAG_EV_BUF_SIZE 16
 #define QUAT_EV_BUF_SIZE 16
@@ -541,29 +541,63 @@ static int em718x_update_run_mode(struct em718x *em718x)
 	return em718x_standby(em718x, true);
 }
 
+static enum em718x_sensors get_fastest_sensor(struct em718x *em718x,
+	u8 enabled_sensors)
+{
+	int i;
+	enum em718x_sensors fastest = SNS_CNT;
+	u32 max_rate;
+	u32 rate;
+
+	for (i = max_rate = 0; i <= SNS_PHYS_MAX; i++) {
+		if (!(enabled_sensors & (1 << i)))
+			continue;
+
+		rate = em718x->sns_state[i].rate;
+
+		if (i == SNS_QUATERNION)
+			rate = em718x->sns_state[SNS_GYRO].rate /
+					(rate ? rate : 1);
+		else if (i == SNS_ACC && em718x->sns_state[SNS_ACC].fifo_size) {
+			rate = rate / em718x->sns_state[SNS_ACC].fifo_size;
+			if (!rate)
+				rate = 1;
+		}
+
+		if (rate > max_rate) {
+			max_rate = rate;
+			fastest = i;
+		}
+	}
+	if (fastest < SNS_CNT)
+		dev_dbg(&em718x->client->dev,
+				"%s: fastest is '%s', rate %u Hz\n",
+				__func__, sns_id[fastest], max_rate);
+	return fastest;
+}
+
 static int em718x_update_event_ena_reg(struct em718x *em718x,
 	u8 enabled_sensors)
 {
 	int i;
 	u8 rpt_ena_reg = EV_RESET | EV_ERROR;
-	const struct em718x_sns_ctl *ctl = em718x_sns_ctl;
+	enum em718x_sensors sns = get_fastest_sensor(em718x, enabled_sensors);
 
-	for (i = 0; i < SNS_CNT; i++) {
-		if (enabled_sensors & (1 << i)) {
+	if (sns <= SNS_PHYS_MAX)
+		rpt_ena_reg |= em718x_sns_ctl[sns].bit_mask;
+
+	for (i = SNS_PHYS_MAX + 1; i < SNS_CNT; i++) {
 			rpt_ena_reg |= em718x_sns_ctl[i].bit_mask;
-			if (i > SNS_GYRO && em718x->sns_state[i].rate) {
+		if (enabled_sensors & (1 << i)) {
 				u8 reg = em718x->sns_state[i].rate |
 						F_REPORT_ENABLE_BIT;
 				smbus_write_byte(em718x->client,
-						ctl[i].rate_set_reg, reg);
-			}
+					em718x_sns_ctl[i].rate_set_reg, reg);
 		} else {
-			if (i > SNS_GYRO && em718x->sns_state[i].rate) {
 				u8 reg = em718x->sns_state[i].rate &
 						~F_REPORT_ENABLE_BIT;
 				smbus_write_byte(em718x->client,
-						ctl[i].rate_set_reg, reg);
-			}
+					em718x_sns_ctl[i].rate_set_reg, reg);
 		}
 	}
 	return smbus_write_byte(em718x->client, R8_EVENTS_ENABLE, rpt_ena_reg);
@@ -656,6 +690,8 @@ static int em718x_set_sensor_rate(struct em718x *em718x,
 		em718x->sns_state[sns].rate_change_time = kt;
 		if (sns == SNS_ACC)
 			em718x->acc_rate_ns = acc_actual_rate_ns(em718x);
+
+		em718x_update_event_ena_reg(em718x, em718x->enabled_sns);
 		rc = em718x_update_run_mode(em718x);
 	}
 	return rc;
