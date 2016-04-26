@@ -185,6 +185,16 @@ enum feature_type {
 	F_STEP_CNTR,
 };
 
+enum f_any_motion {
+	F_ANY_MOTION_CNTR_SHIFT = 4,
+	F_ANY_MOTION_EV_MASK = 0xf,
+	F_ANY_MOTION_CNTR_MASK = ~0xf,
+};
+
+enum feature_sns_ctl {
+	F_REPORT_ENABLE_BIT = 1 << 7,
+};
+
 static const char * const feature_type_id[] = {
 	[F_ANY_MOTION] = "amd",
 	[F_TILT] = "tilt",
@@ -356,7 +366,6 @@ struct em718x {
 	u8 suspend_enabled_sns;
 	struct feature_desc f_desc[MAX_FEATURES_ACTIVE];
 	struct firmware fw;
-	struct wake_lock w_lock;
 	struct notifier_block nb;
 	bool suspend_prepared;
 	struct em718x_parameters *dts_parameters;
@@ -376,7 +385,7 @@ struct em718x {
 	struct parameter_transfer parameter_w;
 	wait_queue_head_t control_wq;
 	bool control_pending;
-
+	u8 last_amd_cntr;
 };
 
 static int smbus_read_byte(struct i2c_client *client,
@@ -519,13 +528,15 @@ static int em718x_update_event_ena_reg(struct em718x *em718x,
 		if (enabled_sensors & (1 << i)) {
 			rpt_ena_reg |= em718x_sns_ctl[i].bit_mask;
 			if (i > SNS_GYRO && em718x->sns_state[i].rate) {
-				u8 reg = em718x->sns_state[i].rate | (1 << 7);
+				u8 reg = em718x->sns_state[i].rate |
+						F_REPORT_ENABLE_BIT;
 				smbus_write_byte(em718x->client,
 						ctl[i].rate_set_reg, reg);
 			}
 		} else {
 			if (i > SNS_GYRO && em718x->sns_state[i].rate) {
-				u8 reg = em718x->sns_state[i].rate & ~(1 << 7);
+				u8 reg = em718x->sns_state[i].rate &
+						~F_REPORT_ENABLE_BIT;
 				smbus_write_byte(em718x->client,
 						ctl[i].rate_set_reg, reg);
 			}
@@ -549,7 +560,8 @@ static int em718x_set_sensor_report(struct em718x *em718x,
 		dev_dbg(dev, "%s: '%s' disable report\n",
 				__func__, sns_id[sns]);
 	}
-	if (em718x->suspend_prepared)
+	if (em718x->suspend_prepared &&
+			!(em718x->suspend_enabled_sns & (1 << sns)))
 		return 0;
 	rc = em718x_update_event_ena_reg(em718x, em718x->enabled_sns);
 	if (!rc)
@@ -602,6 +614,10 @@ static int em718x_set_sensor_rate(struct em718x *em718x,
 	}
 	dev_dbg(dev, "%s: '%s' set rate register: %u\n", __func__, sns_id[sns],
 			rate_to_appy);
+
+	if (sns > SNS_GYRO && enabled(em718x, sns))
+		rate_to_appy |= F_REPORT_ENABLE_BIT;
+
 	rc = smbus_write_byte(em718x->client, ctl->rate_set_reg, rate_to_appy);
 	if (!rc) {
 		em718x->sns_state[sns].rate = rate;
@@ -883,8 +899,8 @@ static ssize_t em718x_set_rate(struct device *dev,
 	for (i = 0; i < ARRAY_SIZE(sns_id); i++) {
 		if (!strcmp(id, sns_id[i])) {
 			mutex_lock(&em718x->ctl_lock);
+			em718x->sns_req[i].rate = rate;
 			if (em718x->sns_state[i].rate != rate) {
-				em718x->sns_req[i].rate = rate;
 				post_control_work_locked(em718x);
 				mutex_unlock(&em718x->ctl_lock);
 				wait_event_interruptible(em718x->control_wq,
@@ -930,13 +946,12 @@ static ssize_t em718x_set_report_enable(struct device *dev,
 
 	if (2 != sscanf(buf, "%32s %u", id, &enable))
 		return -EINVAL;
-
 	enable = !!enable;
 	for (i = 0; i < ARRAY_SIZE(sns_id); i++) {
 		if (!strcmp(id, sns_id[i])) {
 			mutex_lock(&em718x->ctl_lock);
+			em718x->sns_req[i].report = enable;
 			if (em718x->sns_state[i].report != enable) {
-				em718x->sns_req[i].report = enable;
 				post_control_work_locked(em718x);
 				mutex_unlock(&em718x->ctl_lock);
 				wait_event_interruptible(em718x->control_wq,
@@ -1111,7 +1126,6 @@ static ssize_t em718x_set_wuff(struct device *dev,
 static DEVICE_ATTR(wuff, S_IRUGO | S_IWUSR,
 		em718x_get_wuff, em718x_set_wuff);
 
-
 static ssize_t em718x_get_acc_rate_ns(struct device *dev,
 			struct device_attribute *attr,
 			char *buf)
@@ -1202,8 +1216,7 @@ static void em718x_queue_event_wake(struct em718x *em718x,
 	}
 	p->ev[p->widx] = *ev;
 	p->widx = widx;
-	if (!wake_lock_active(&em718x->w_lock))
-		wake_lock(&em718x->w_lock);
+	pm_stay_awake(&em718x->client->dev);
 	mutex_unlock(&p->lock);
 	wake_up_interruptible(&ev_dev->wq);
 }
@@ -1299,6 +1312,7 @@ static void em718x_process_amgf(struct em718x *em718x,
 {
 	struct device *dev = &em718x->client->dev;
 	struct sensor_event ev;
+	u8 last_amd_cntr;
 
 	ev.time = em718x->irq_time;
 
@@ -1402,16 +1416,18 @@ static void em718x_process_amgf(struct em718x *em718x,
 				em718x_queue_event_wake(em718x, &ev);
 				break;
 			case F_ANY_MOTION:
-				if (!(val & ~1)) {
+				last_amd_cntr = val >> F_ANY_MOTION_CNTR_SHIFT;
+				if (last_amd_cntr == em718x->last_amd_cntr) {
 					dev_info(dev, "Skip amd %d\n", val);
 					break;
 				}
-				dev_info(dev, "feature-%d: amd %d (%d)\n",
-					i, !(val & 1), val >> 1);
-				val &= 1;
+				em718x->last_amd_cntr = last_amd_cntr;
+				dev_info(dev, "feature-%d: amd %d (seq %d)\n",
+					i, val & F_ANY_MOTION_EV_MASK,
+					last_amd_cntr);
 				ev.type = SENSOR_TYPE_AMD |
 						SENSOR_TYPE_WAKE_UP;
-				ev.d[0] = !val;
+				ev.d[0] = val & F_ANY_MOTION_EV_MASK;
 				em718x_queue_event_wake(em718x, &ev);
 				break;
 			default:
@@ -1905,10 +1921,6 @@ static int em718x_suspend_notifier(struct notifier_block *nb,
 	case PM_SUSPEND_PREPARE:
 		mutex_lock(&em718x->lock);
 
-		dev_dbg(&em718x->client->dev,
-			"PM_SUSPEND_PREPARE: report enable mask 0x%02x\n",
-			em718x->enabled_sns & em718x->suspend_enabled_sns);
-
 		em718x_update_event_ena_reg(em718x, em718x->enabled_sns &
 				em718x->suspend_enabled_sns);
 		(void)notify_app_cpu_suspended(em718x, true);
@@ -1918,8 +1930,6 @@ static int em718x_suspend_notifier(struct notifier_block *nb,
 		synchronize_irq(em718x->irq);
 
 		dev_dbg(&em718x->client->dev, "no non-wakeup IRQs from now\n");
-		if (wake_lock_active(&em718x->w_lock))
-			dev_warn(&em718x->client->dev, "wake_lock_active!\n");
 
 		break;
 	case PM_POST_SUSPEND:
@@ -1982,10 +1992,9 @@ static ssize_t em718x_cdev_read(struct file *filp, char __user *buf,
 		}
 	}
 	if ((ev_dev == &em718x->wake_ev_device) &&
-			(ev_dev->ev_queue.ridx == ev_dev->ev_queue.widx) &&
-			wake_lock_active(&em718x->w_lock)) {
-		wake_unlock(&em718x->w_lock);
-		dev_dbg(&em718x->client->dev, "removing wake lock\n");
+			(ev_dev->ev_queue.ridx == ev_dev->ev_queue.widx)) {
+		pm_relax(&em718x->client->dev);
+		dev_dbg(&em718x->client->dev, "pm_relax\n");
 	}
 exit:
 	mutex_unlock(&p->lock);
@@ -2111,7 +2120,6 @@ static int em718x_probe(struct i2c_client *client,
 	INIT_WORK(&em718x->sns_ctl_work, sensor_control_work);
 	mutex_init(&em718x->lock);
 	mutex_init(&em718x->ctl_lock);
-	wake_lock_init(&em718x->w_lock, WAKE_LOCK_SUSPEND, dev_name(dev));
 	init_waitqueue_head(&em718x->control_wq);
 	rc = em718x_check_id(em718x);
 	if (rc)
@@ -2214,7 +2222,6 @@ exit_misc:
 	misc_deregister(&em718x->ev_device.cdev);
 	misc_deregister(&em718x->wake_ev_device.cdev);
 exit:
-	wake_lock_destroy(&em718x->w_lock);
 	return rc;
 }
 
@@ -2226,7 +2233,6 @@ static int em718x_remove(struct i2c_client *client)
 	sysfs_remove_bin_file(&client->dev.kobj, &parameter_bin_data);
 	misc_deregister(&em718x->ev_device.cdev);
 	misc_deregister(&em718x->wake_ev_device.cdev);
-	wake_lock_destroy(&em718x->w_lock);
 	return 0;
 }
 
