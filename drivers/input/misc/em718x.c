@@ -354,6 +354,7 @@ struct event_device {
 struct sensor_request {
 	u32 rate;
 	bool report;
+	bool flush;
 	int fifo_size;
 	ktime_t rate_change_time;
 };
@@ -1051,8 +1052,11 @@ static void sensor_control_work(struct work_struct *work)
 		if (state->rate != rq->rate)
 			(void)em718x_set_sensor_rate(em718x, i, rq->rate);
 
-		if (i == SNS_ACC && (rq->fifo_size || state->fifo_size))
+		if (i == SNS_ACC && ((rq->fifo_size != state->fifo_size) ||
+				(state->fifo_size && rq->flush))) {
 			(void)em718x_fifo_size_set(em718x, rq->fifo_size);
+			rq->flush = false;
+		}
 
 		if (state->report != rq->report)
 			(void)em718x_set_sensor_report(em718x, i, rq->report);
@@ -1104,6 +1108,31 @@ exit:
 static DEVICE_ATTR(fifo_size, S_IRUGO | S_IWUSR,
 		em718x_get_fifo_size, em718x_set_fifo_size);
 
+
+static ssize_t em718x_set_flush(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct em718x *em718x = dev_get_drvdata(dev);
+	int rc;
+	unsigned long flush;
+	rc = kstrtoul(buf, 0, &flush);
+
+	if (rc)
+		return rc;
+	if (flush != 1)
+		return -EINVAL;
+
+	mutex_lock(&em718x->ctl_lock);
+	if (em718x->sns_state[SNS_ACC].fifo_size) {
+		em718x->sns_req[SNS_ACC].flush = true;
+		post_control_work_locked(em718x);
+	}
+	mutex_unlock(&em718x->ctl_lock);
+	return count;
+}
+
+static DEVICE_ATTR(flush, S_IWUSR, NULL, em718x_set_flush);
 
 static ssize_t em718x_get_fifo_max_size(struct device *dev,
 			struct device_attribute *attr,
@@ -1168,6 +1197,7 @@ static struct attribute *em718x_attributes[] = {
 	&dev_attr_fifo_size_max.attr,
 	&dev_attr_wuff.attr,
 	&dev_attr_acc_rate_ns.attr,
+	&dev_attr_flush.attr,
 	NULL
 };
 
