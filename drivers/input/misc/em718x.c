@@ -331,6 +331,7 @@ struct sensor_event_queue {
 	struct sensor_event *ev;
 	int queue_size;
 	struct mutex lock;
+	bool ready;
 };
 
 struct event_device {
@@ -388,6 +389,7 @@ struct em718x {
 	wait_queue_head_t control_wq;
 	bool control_pending;
 	u8 last_amd_cntr;
+	struct delayed_work wakeup_work;
 };
 
 static int smbus_read_byte(struct i2c_client *client,
@@ -1192,6 +1194,21 @@ static int step_cntr_get_32(struct em718x *em718x, int *ext_steps, int idx)
 	return -EINVAL;
 }
 
+static void em718x_wakeup_work_func(struct work_struct *work)
+{
+	struct delayed_work *dw = container_of(work, struct delayed_work,
+			work);
+	struct em718x *em718x = container_of(dw, struct em718x, wakeup_work);
+	struct sensor_event_queue *p = &em718x->ev_device.ev_queue;
+
+	mutex_lock(&p->lock);
+	p->ready = p->ridx != p->widx;
+	if (p->ready)
+		wake_up_interruptible(&em718x->ev_device.wq);
+	mutex_unlock(&p->lock);
+}
+
+#define STREAMING_EV_WAKE_DELAY 50
 static void em718x_queue_event(struct em718x *em718x, struct sensor_event *ev)
 {
 	struct event_device *ev_dev = &em718x->ev_device;
@@ -1204,11 +1221,14 @@ static void em718x_queue_event(struct em718x *em718x, struct sensor_event *ev)
 	if (p->ridx == widx) {
 		dev_warn(&em718x->client->dev, "fifo overrun\n");
 		p->ridx = (p->ridx + 1) % p->queue_size;
+		p->ready = true;
+		wake_up_interruptible(&em718x->ev_device.wq);
 	}
 	p->ev[p->widx] = *ev;
 	p->widx = widx;
 	mutex_unlock(&p->lock);
-	wake_up_interruptible(&ev_dev->wq);
+	schedule_delayed_work(&em718x->wakeup_work,
+			msecs_to_jiffies(STREAMING_EV_WAKE_DELAY));
 }
 
 static void em718x_queue_event_wake(struct em718x *em718x,
@@ -1228,6 +1248,7 @@ static void em718x_queue_event_wake(struct em718x *em718x,
 	p->ev[p->widx] = *ev;
 	p->widx = widx;
 	pm_stay_awake(&em718x->client->dev);
+	p->ready = true;
 	mutex_unlock(&p->lock);
 	wake_up_interruptible(&ev_dev->wq);
 }
@@ -1977,14 +1998,14 @@ static ssize_t em718x_cdev_read(struct file *filp, char __user *buf,
 
 	mutex_lock(&p->lock);
 
-	while (p->ridx == p->widx) {
+	while (!p->ready) {
 
 		mutex_unlock(&p->lock);
 		if (filp->f_flags & O_NONBLOCK) {
 			len = -EAGAIN;
 			goto exit;
 		}
-		if (wait_event_interruptible(ev_dev->wq, p->ridx != p->widx)) {
+		if (wait_event_interruptible(ev_dev->wq, p->ready)) {
 			len = -ERESTARTSYS;
 			goto exit;
 		}
@@ -2007,6 +2028,7 @@ static ssize_t em718x_cdev_read(struct file *filp, char __user *buf,
 		pm_relax(&em718x->client->dev);
 		dev_dbg(&em718x->client->dev, "pm_relax\n");
 	}
+	p->ready = false;
 exit:
 	mutex_unlock(&p->lock);
 	return len;
@@ -2026,7 +2048,7 @@ static unsigned int em718x_cdev_poll(struct file *filp,
 
 	poll_wait(filp, &ev_dev->wq, pt);
 	mutex_lock(&p->lock);
-	if (p->ridx != p->widx)
+	if (p->ready)
 		mask = POLLIN | POLLRDNORM;
 	else
 		mask = 0;
@@ -2128,6 +2150,7 @@ static int em718x_probe(struct i2c_client *client,
 	i2c_set_clientdata(client, em718x);
 	em718x->client = client;
 	INIT_DELAYED_WORK(&em718x->reset_work, em718x_reset_work_func);
+	INIT_DELAYED_WORK(&em718x->wakeup_work, em718x_wakeup_work_func);
 	INIT_WORK(&em718x->sns_ctl_work, sensor_control_work);
 	mutex_init(&em718x->lock);
 	mutex_init(&em718x->ctl_lock);
