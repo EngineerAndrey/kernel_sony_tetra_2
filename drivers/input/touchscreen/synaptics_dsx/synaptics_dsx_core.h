@@ -305,6 +305,7 @@ struct synaptics_rmi4_data {
 	unsigned f11_data_28;
 	bool has_large_obj_det;
 	unsigned char large_obj_size;
+	bool lo_detected;
 };
 
 struct synaptics_dsx_bus_access {

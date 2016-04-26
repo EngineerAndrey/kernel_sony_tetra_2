@@ -999,6 +999,8 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 		rmi4_data->wg_block_until_no_finger = false;
 	}
 
+	mutex_lock(&(rmi4_data->rmi4_report_mutex));
+
 	if (rmi4_data->has_large_obj_det && !rmi4_data->wg_block_sleep) {
 		retval = synaptics_rmi4_reg_read(rmi4_data,
 				rmi4_data->f11_data_28,
@@ -1008,18 +1010,15 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 					"Large object present = %d",
 					!!(data28 & 0x02));
 			if (data28 & 0x02) {
-				pr_info("%s: report palm!\n", __func__);
+				dev_info(rmi4_data->pdev->dev.parent,
+					"%s: report palm!\n", __func__);
 				input_report_key(rmi4_data->input_dev,
 					KEY_SLEEP, 1);
 				input_sync(rmi4_data->input_dev);
-					input_report_key(rmi4_data->input_dev,
-					KEY_SLEEP, 0);
-				input_sync(rmi4_data->input_dev);
+				rmi4_data->lo_detected = true;
 			}
 		}
 	}
-
-	mutex_lock(&(rmi4_data->rmi4_report_mutex));
 
 	for (finger = 0; finger < fingers_supported; finger++) {
 		reg_index = finger / 4;
@@ -1113,6 +1112,14 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 #ifndef TYPE_B_PROTOCOL
 		input_mt_sync(rmi4_data->input_dev);
 #endif
+	}
+
+	if (rmi4_data->lo_detected && !(data28 & 0x02)) {
+		dev_info(rmi4_data->pdev->dev.parent,
+				"%s: palm removed!\n", __func__);
+		input_report_key(rmi4_data->input_dev,
+				KEY_SLEEP, 0);
+		rmi4_data->lo_detected = false;
 	}
 
 	input_sync(rmi4_data->input_dev);
@@ -3063,6 +3070,15 @@ static int synaptics_rmi4_free_fingers(struct synaptics_rmi4_data *rmi4_data)
 #ifndef TYPE_B_PROTOCOL
 	input_mt_sync(rmi4_data->input_dev);
 #endif
+
+	if (rmi4_data->lo_detected) {
+		dev_info(rmi4_data->pdev->dev.parent,
+				"%s: palm removed!\n", __func__);
+		input_report_key(rmi4_data->input_dev,
+				KEY_SLEEP, 0);
+		rmi4_data->lo_detected = false;
+	}
+
 	input_sync(rmi4_data->input_dev);
 
 	mutex_unlock(&(rmi4_data->rmi4_report_mutex));
@@ -3667,6 +3683,7 @@ static ssize_t synaptics_mode_store(struct device *dev,
 		return -EINVAL;
 
 	if (!strncmp(buf, "doze", strlen("doze"))) {
+		synaptics_rmi4_free_fingers(rmi4_data);
 		synaptics_rmi4_wakeup_gesture(rmi4_data, true);
 		rmi4_data->stay_awake = true;
 		dev_info(rmi4_data->pdev->dev.parent, "Setting touch to doze");
@@ -3676,6 +3693,7 @@ static ssize_t synaptics_mode_store(struct device *dev,
 		dev_info(rmi4_data->pdev->dev.parent, "Setting touch to on");
 	} else if (!strncmp(buf, "off", strlen("off"))) {
 		/* Turn off wake up gestures */
+		synaptics_rmi4_free_fingers(rmi4_data);
 		synaptics_rmi4_wakeup_gesture(rmi4_data, false);
 		rmi4_data->stay_awake = false;
 		dev_info(rmi4_data->pdev->dev.parent, "Setting touch to off");
