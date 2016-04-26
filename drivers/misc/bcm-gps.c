@@ -425,14 +425,13 @@ static int bcm_gps_probe(struct platform_device *pdev)
 		goto out;
 	}
 
-	bcm_gps_start();
 
 	/*pr_info("%s: 2 - host_wake_gpio=%d\n",
 		__func__,
 		gps_g->pdata->host_wake_gpio);
 	pr_err("%s:  Ignore hostwake: no geofence for now", __func__);
 
-	bcm_gps_init_hostwake(gps_g);
+	bcm_gps_init_hostwake(gps_g);*/
 
 	gps_g->host_wake_ws = wakeup_source_register("bcm-gps-hostwake-ws");
 
@@ -442,8 +441,8 @@ static int bcm_gps_probe(struct platform_device *pdev)
 			__func__);
 		return -ENODEV;
 	}
-	 */
 
+    bcm_gps_start();
 	gps_g->pgps->misc.minor = MISC_DYNAMIC_MINOR;
 	gps_g->pgps->misc.name = "bcm-gps";
 	gps_g->pgps->misc.fops = &bcm_gps_fops;
