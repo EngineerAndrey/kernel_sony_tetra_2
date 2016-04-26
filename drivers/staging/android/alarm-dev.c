@@ -390,7 +390,16 @@ static void devalarm_triggered(struct devalarm *alarm)
 	spin_lock_irqsave(&alarm_slock, flags);
 	if (alarm_enabled & alarm_type_mask) {
 		__pm_wakeup_event(&alarm_wake_lock, 5000); /* 5secs */
-		alarm_enabled &= ~alarm_type_mask;
+		if (is_wakeup(alarm->type)) {
+			if (!alarmtimer_is_queued(&alarm->u.alrm)) {
+				alarm_enabled &= ~alarm_type_mask;
+			}
+		}
+		else {
+			if (!hrtimer_is_queued(&alarm->u.hrt)) {
+				alarm_enabled &= ~alarm_type_mask;
+			}
+		}
 		alarm_pending |= alarm_type_mask;
 		wake_up(&alarm_wait_queue);
 	}
