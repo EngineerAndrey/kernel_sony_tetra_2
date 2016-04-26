@@ -14,6 +14,7 @@
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
+#include <linux/ktime.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -344,6 +345,7 @@ struct sensor_request {
 	u32 rate;
 	bool report;
 	int fifo_size;
+	ktime_t rate_change_time;
 };
 
 struct parameter_transfer {
@@ -595,6 +597,7 @@ static unsigned long acc_actual_rate_ns(struct em718x *em718x)
 	return supported_filter_bw[i].update_t_ns;
 }
 
+#define RATE_CHANGE_MIN_DELAY_US 50000
 static int em718x_set_sensor_rate(struct em718x *em718x,
 		enum em718x_sensors sns, u32 rate)
 {
@@ -602,6 +605,8 @@ static int em718x_set_sensor_rate(struct em718x *em718x,
 	const struct em718x_sns_ctl *ctl = &em718x_sns_ctl[sns];
 	int rc;
 	u8 rate_to_appy;
+	ktime_t kt = ktime_get_boottime();
+	s64 us_delta;
 
 	dev_dbg(dev, "%s: %s, rate %u\n", __func__, sns_id[sns], rate);
 
@@ -618,9 +623,15 @@ static int em718x_set_sensor_rate(struct em718x *em718x,
 	if (sns > SNS_GYRO && enabled(em718x, sns))
 		rate_to_appy |= F_REPORT_ENABLE_BIT;
 
+	us_delta = ktime_us_delta(kt, em718x->sns_state[sns].rate_change_time);
+	if (us_delta < RATE_CHANGE_MIN_DELAY_US) {
+		us_delta = RATE_CHANGE_MIN_DELAY_US - us_delta;
+		usleep_range(us_delta, us_delta + 1000);
+	}
 	rc = smbus_write_byte(em718x->client, ctl->rate_set_reg, rate_to_appy);
 	if (!rc) {
 		em718x->sns_state[sns].rate = rate;
+		em718x->sns_state[sns].rate_change_time = kt;
 		if (sns == SNS_ACC)
 			em718x->acc_rate_ns = acc_actual_rate_ns(em718x);
 		rc = em718x_update_run_mode(em718x);
