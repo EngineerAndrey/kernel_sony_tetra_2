@@ -946,15 +946,14 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 		if (detected_gestures) {
 			int key = rmi4_data->hw_if->board_data->wakeup_gest_key;
 
-			dev_info(rmi4_data->pdev->dev.parent, "detected_gestures %d\n",
-				detected_gestures);
+			dev_info(rmi4_data->pdev->dev.parent,
+				"detected_gestures %d\n", detected_gestures);
 			input_report_key(rmi4_data->input_dev, key, 1);
 			input_sync(rmi4_data->input_dev);
 			input_report_key(rmi4_data->input_dev, key, 0);
 			input_sync(rmi4_data->input_dev);
 			rmi4_data->wg_sent = true;
-			rmi4_data->wg_ongoing = true;
-			rmi4_data->block_until_no_finger = true;
+			rmi4_data->wg_block_until_no_finger = true;
 		}
 		return 0;
 	}
@@ -966,29 +965,7 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 	if (retval < 0)
 		return 0;
 
-	if (rmi4_data->has_large_obj_det) {
-		if (!rmi4_data->wg_ongoing) {
-			retval = synaptics_rmi4_reg_read(rmi4_data,
-					rmi4_data->f11_data_28,
-					&data28, sizeof(data28));
-			if (retval >= 0) {
-				dev_dbg(rmi4_data->pdev->dev.parent,
-						"Large object present = %d",
-						!!(data28 & 0x02));
-				if (data28 & 0x02) {
-					input_report_key(rmi4_data->input_dev,
-						KEY_SLEEP, 1);
-					input_sync(rmi4_data->input_dev);
-
-					input_report_key(rmi4_data->input_dev,
-						KEY_SLEEP, 0);
-					input_sync(rmi4_data->input_dev);
-				}
-			}
-		}
-	}
-
-	if (rmi4_data->block_until_no_finger) {
+	if (rmi4_data->wg_block_until_no_finger) {
 		finger = 0;
 		finger_status = 0;
 		while (finger < fingers_supported) {
@@ -999,7 +976,27 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 				return 0;
 			finger++;
 		}
-		rmi4_data->block_until_no_finger = false;
+		rmi4_data->wg_block_until_no_finger = false;
+	}
+
+	if (rmi4_data->has_large_obj_det) {
+		retval = synaptics_rmi4_reg_read(rmi4_data,
+				rmi4_data->f11_data_28,
+				&data28, sizeof(data28));
+		if (retval >= 0) {
+			dev_dbg(rmi4_data->pdev->dev.parent,
+					"Large object present = %d",
+					!!(data28 & 0x02));
+			if (data28 & 0x02) {
+				pr_info("%s: report palm!\n", __func__);
+				input_report_key(rmi4_data->input_dev,
+					KEY_SLEEP, 1);
+				input_sync(rmi4_data->input_dev);
+					input_report_key(rmi4_data->input_dev,
+					KEY_SLEEP, 0);
+				input_sync(rmi4_data->input_dev);
+			}
+		}
 	}
 
 	mutex_lock(&(rmi4_data->rmi4_report_mutex));
@@ -1089,9 +1086,6 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 	}
 
 	if (touch_count == 0) {
-		if (rmi4_data->wg_ongoing)
-			rmi4_data->wg_ongoing = false;
-
 		input_report_key(rmi4_data->input_dev,
 				BTN_TOUCH, 0);
 		input_report_key(rmi4_data->input_dev,
