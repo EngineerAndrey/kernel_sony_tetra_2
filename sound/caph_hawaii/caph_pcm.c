@@ -78,9 +78,9 @@ the GPL, without Broadcom's express prior written consent.
 #define	PCM_MAX_VOICE_PLAYBACK_PERIOD_BYTES		\
 (PCM_MAX_PLAYBACK_BUF_BYTES/2)
 
-#define	PCM_MAX_CAPTURE_BUF_BYTES       (16 * 1024)
-#define	PCM_MIN_CAPTURE_PERIOD_BYTES    (4 * 1024)	/*(16 * 1024) */
-#define	PCM_MAX_CAPTURE_PERIOD_BYTES    (PCM_MAX_CAPTURE_BUF_BYTES/2)
+#define	PCM_MAX_CAPTURE_BUF_BYTES       (7680*2)
+#define	PCM_MIN_CAPTURE_PERIOD_BYTES    (640*2)
+#define	PCM_MAX_CAPTURE_PERIOD_BYTES    (7680)
 
 #define	PCM_MAX_VOICE_CAPTURE_BUF_BYTES       (15360)
 #define	PCM_MIN_VOICE_CAPTURE_PERIOD_BYTES    (320 * 4)
@@ -757,15 +757,6 @@ static int PcmCaptureOpen(struct snd_pcm_substream *substream)
 		chip->streamCtl[substream_number].dev_prop.c.drv_type =
 		    AUDIO_DRIVER_CAPT_HQ;
 		runtime->hw = brcm_capture_hw;
-		/* Lets make it a multiple of 4k */
-		err = snd_pcm_hw_constraint_step(runtime, 0,
-			SNDRV_PCM_HW_PARAM_BUFFER_BYTES,
-			4096);
-		err = snd_pcm_hw_constraint_list(runtime, 0,
-			SNDRV_PCM_HW_PARAM_PERIOD_BYTES,
-			&pcm_capture_period_bytes_constraints_list);
-		if (err < 0)
-			return err;
 	} else if ((substream_number + 1) == CTL_STREAM_PANEL_SPEECHIN) {
 		aTrace(LOG_ALSA_INTERFACE, "Inside speecin init\n");
 		chip->streamCtl[substream_number].dev_prop.c.drv_type =
