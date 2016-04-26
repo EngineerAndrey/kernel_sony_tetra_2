@@ -920,6 +920,39 @@ static void vsync_work_smart(struct work_struct *work)
 	schedule_work(&fb->vsync_smart);
 }
 
+static void set_special_mode(struct kona_fb *fb) {
+	/* Enter special mode */
+	if (fb->blank_state != KONA_FB_UNBLANK) {
+		/* If panel is off, don't do anything with the hw */
+		konafb_debug("Not in UNBLANK state (%d)\n",
+						fb->blank_state);
+		fb->display_info->special_mode_on = true;
+		fb->suspend_link = true;
+		return;
+	}
+	if (fb->fb_data->esdcheck)
+		cancel_delayed_work(&fb->esd_check_work);
+
+	if (wait_for_completion_timeout(&fb->prev_buf_done_sem,
+					msecs_to_jiffies(10000)) <= 0)
+		konafb_error("timed out waiting for completion\n");
+	if (fb->link_suspended) {
+		konafb_debug("Link suspended when entering special "
+							"mode\n");
+		link_control(fb, RESUME_LINK);
+	}
+	kona_clock_start(fb);
+	if (fb->display_info->cabc_enabled)
+		panel_write(fb->display_info->cabc_off_seq);
+	panel_write(fb->display_info->special_mode_on_seq);
+	kona_clock_stop(fb);
+	fb->suspend_link = true;
+	link_control(fb, SUSPEND_LINK);
+	complete(&g_kona_fb->prev_buf_done_sem);
+	fb->display_info->special_mode_on = true;
+	konafb_debug("Special mode ON\n");
+}
+
 static ssize_t kona_fb_panel_name_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -988,36 +1021,10 @@ static ssize_t kona_fb_panel_mode_store(struct device *dev,
 	konafb_info("panel mode %i\n", val);
 	mutex_lock(&fb->update_sem);
 	if (val) {
-		/* Enter special mode */
-		if (fb->blank_state != KONA_FB_UNBLANK) {
-			/* If panel is off, don't do anything with the hw */
-			konafb_debug("Not in UNBLANK state (%d)\n",
-							fb->blank_state);
-			fb->display_info->special_mode_on = true;
-			fb->suspend_link = true;
-			goto exit_unlock;
-		}
-		if (fb->fb_data->esdcheck)
-			cancel_delayed_work(&fb->esd_check_work);
-
-		if (wait_for_completion_timeout(&fb->prev_buf_done_sem,
-						msecs_to_jiffies(10000)) <= 0)
-			konafb_error("timed out waiting for completion\n");
-		if (fb->link_suspended) {
-			konafb_debug("Link suspended when entering special "
-								"mode\n");
-			link_control(fb, RESUME_LINK);
-		}
-		kona_clock_start(fb);
-		if (fb->display_info->cabc_enabled)
-			panel_write(fb->display_info->cabc_off_seq);
-		panel_write(fb->display_info->special_mode_on_seq);
-		kona_clock_stop(fb);
-		fb->suspend_link = true;
-		link_control(fb, SUSPEND_LINK);
-		complete(&g_kona_fb->prev_buf_done_sem);
-		fb->display_info->special_mode_on = true;
-		konafb_debug("Special mode ON\n");
+		if (fb->display_info->brightness != 0)
+			fb->display_info->delayed_special_mode = true;
+		else
+			set_special_mode(fb);
 	} else {
 		/* Exit special mode */
 		if (fb->blank_state == KONA_FB_BLANK) {
@@ -1056,12 +1063,40 @@ exit:
 	return ret;
 }
 
+static ssize_t kona_fb_backlight_brightness_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	ssize_t ret = count;
+	struct kona_fb *fb = dev_get_drvdata(dev);
+	uint32_t brightness;
+
+	if (sscanf(buf, "%i", &brightness) != 1) {
+		konafb_error("Error, buf = %s\n", buf);
+		ret = -EINVAL;
+		goto exit;
+	}
+
+	mutex_lock(&fb->update_sem);
+	fb->display_info->brightness = brightness;
+	if (fb->display_info->delayed_special_mode && brightness == 0) {
+		set_special_mode(fb);
+		fb->display_info->delayed_special_mode = false;
+	}
+	mutex_unlock(&fb->update_sem);
+exit:
+	return ret;
+}
+
 static struct device_attribute panel_attributes[] = {
 	__ATTR(panel_name, S_IRUGO, kona_fb_panel_name_show, NULL),
 	__ATTR(panel_id, S_IRUGO, kona_fb_panel_id_show, NULL),
 	__ATTR(panel_mode, S_IRUGO|S_IWUSR|S_IWGRP,
 					kona_fb_panel_mode_show,
 					kona_fb_panel_mode_store),
+	__ATTR(backlight_brightness, S_IRUGO|S_IWUSR|S_IWGRP,
+					NULL,
+					kona_fb_backlight_brightness_store),
+
 };
 
 static int register_attributes(struct device *dev)

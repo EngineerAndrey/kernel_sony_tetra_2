@@ -129,6 +129,8 @@ extern "C" {
 		char *scrn_off_seq;
 		bool special_mode_panel;
 		bool special_mode_on;
+		bool delayed_special_mode;
+		uint32_t brightness;
 		char *special_mode_on_seq;
 		char *special_mode_off_seq;
 		char *cabc_init_seq;
