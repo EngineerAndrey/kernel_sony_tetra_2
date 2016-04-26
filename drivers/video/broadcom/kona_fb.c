@@ -1062,6 +1062,7 @@ static ssize_t kona_fb_panel_mode_store(struct device *dev,
 		}
 	} else {
 		/* Exit special mode */
+		fb->display_info->delayed_special_mode = false;
 		if (fb->blank_state == KONA_FB_BLANK) {
 			/* If powerHAL exits special mode before system has
 			   has sent KONA_FB_UNBLANK we will end up here. In
