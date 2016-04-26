@@ -1177,8 +1177,12 @@ CSL_LCD_RES_T CSL_DSI_SendPacket(CSL_LCD_HANDLE client,
 	}
 
 	if (dsiH->init != DSI_INITIALIZED) {
-		pr_err("%s:%d\n");
+		// Commented out until the two arguments expected by
+		// the format string are added
+		// pr_err("%s:%d\n");
 		__WARN();
+		if (!clientH->hasLock)
+			OSSEMAPHORE_Release(dsiH->semaDsi);
 		return CSL_LCD_ERR;
 	}
 
