@@ -185,7 +185,7 @@ config BRCM_CP_CRASH_DUMP_EMMC
 
 config CP_CRASH
 	bool "cp crash without dump"
-	depends on BCM_MODEM && MACH_HAWAII_SS_COMMON
+	depends on CP_CRASH_NOTIFIER && MACH_HAWAII_SS_COMMON
         default y
         --help---
           Say Y to enable cp crash from AP panic handler
