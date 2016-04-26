@@ -223,7 +223,7 @@ struct data_quat {
 		};
 	};
 	u16 t;
-};
+} __attribute__((__packed__));
 
 struct feature_data {
 	u16 d[4];
@@ -234,7 +234,7 @@ struct em718x_amgf_result {
 	struct data_3d acc;
 	struct data_3d gyro;
 	struct feature_data fd;
-};
+} __attribute__((__packed__));
 
 struct em718x_status {
 	union {
@@ -276,7 +276,16 @@ struct em718x_status {
 			} algo_st;
 		};
 	};
-};
+} __attribute__((__packed__));
+
+struct hub_all_data {
+	struct data_quat quat;
+	struct em718x_amgf_result amgf;
+	u8 q_rate_div;
+	u8 enabled_events;
+	u8 host_ctl;
+	struct em718x_status status;
+} __attribute__((__packed__));
 
 struct feature_desc {
 	bool present;
@@ -1095,6 +1104,7 @@ exit:
 static DEVICE_ATTR(fifo_size, S_IRUGO | S_IWUSR,
 		em718x_get_fifo_size, em718x_set_fifo_size);
 
+
 static ssize_t em718x_get_fifo_max_size(struct device *dev,
 			struct device_attribute *attr,
 			char *buf)
@@ -1547,62 +1557,77 @@ static irqreturn_t em718x_irq_handler(int irq, void *handle)
 	struct em718x *em718x = handle;
 	struct device *dev = &em718x->client->dev;
 	int rc;
-	struct em718x_status status;
+	struct hub_all_data data;
+	bool one_read;
 
 	mutex_lock(&em718x->lock);
 
 	em718x->irq_time = ktime_to_ns(ktime_get_boottime());
 
-	rc = smbus_read_byte_block(em718x->client, R8_EV_STATUS,
-			(u8 *)&status, sizeof(status));
+	one_read = (em718x->enabled_sns & SNS_QUATERNION) &&
+		(em718x->enabled_sns & (SNS_ACC | SNS_GYRO | SNS_MAG));
+
+	if (one_read)
+		rc =  big_block_read(em718x->client, RX_QUAT_DATA,
+				sizeof(data), (u8 *)&data);
+	else
+		rc = smbus_read_byte_block(em718x->client, R8_EV_STATUS,
+				(u8 *)&data.status, sizeof(data.status));
+
 	if (rc)
 		goto exit;
-	dev_vdbg(dev, "status 0x%02x%02x%02x%02x\n", status.s[0],
-			status.s[1], status.s[2], status.s[3]);
+	dev_vdbg(dev, "status 0x%02x\n", data.status.event_status);
 
-	if (status.ev_st.reset) {
+
+	if (data.status.ev_st.reset) {
 		dev_info(dev, "reset occured\n");
 		schedule_delayed_work(&em718x->reset_work,
-				msecs_to_jiffies(50));
+				msecs_to_jiffies(30));
 		goto exit;
 	}
-	if (status.ev_st.error) {
+	if (data.status.ev_st.error) {
 		u8 err;
 
 		dev_err(dev, "FW error occured:\n");
 		smbus_read_byte(em718x->client, R8_ERR_REGISTER, &err);
 		dev_info(dev, "sensor status 0x%02x, err 0x%02x\n",
-				status.s[1], err);
+				data.status.s[1], err);
 		(void)smbus_write_byte(em718x->client, R8_RESET, 0x01);
 		goto exit;
 	}
 
-	if (em718x->status_reported != status.s[3]) {
+	if (em718x->status_reported != data.status.s[3]) {
 		struct sensor_event ev;
 
 		ev.time =  em718x->irq_time;
 		ev.type = SENSOR_TYPE_STATUS;
-		ev.d[0] = status.s[3];
+		ev.d[0] = data.status.s[3];
 		em718x_queue_event(em718x, &ev);
-		dev_dbg(dev, "sensor status updated 0x%02x\n", status.s[3]);
-		em718x->status_reported = status.s[3];
+		dev_dbg(dev, "sensor status updated 0x%02x\n",
+				data.status.s[3]);
+		em718x->status_reported = data.status.s[3];
 	}
 
-	if (status.ev_st.quaternion) {
-		struct data_quat quat;
-
-		rc = big_block_read(em718x->client, RX_QUAT_DATA,
-				sizeof(quat), (u8 *)&quat);
-		if (!rc)
-			em718x_process_q(em718x, &quat);
+	if (data.status.ev_st.quaternion) {
+		if (!one_read) {
+			rc = big_block_read(em718x->client, RX_QUAT_DATA,
+					sizeof(data.quat), (u8 *)&data.quat);
+			if (rc)
+				goto exit;
+		}
+		em718x_process_q(em718x, &data.quat);
 	}
-	if (status.event_status & (EV_ACC | EV_MAG | EV_GYRO | EV_FEATURE)) {
-		struct em718x_amgf_result amgf;
 
-		rc = big_block_read(em718x->client, RX_SNS_DATA,
-				sizeof(amgf), (u8 *)&amgf);
-		if (!rc)
-			em718x_process_amgf(em718x, &amgf, status.event_status);
+	if (data.status.event_status &
+			(EV_ACC | EV_MAG | EV_GYRO | EV_FEATURE)) {
+		if (!one_read) {
+			rc = big_block_read(em718x->client, RX_SNS_DATA,
+					sizeof(data.amgf), (u8 *)&data.amgf);
+			if (rc)
+				goto exit;
+		}
+		em718x_process_amgf(em718x, &data.amgf,
+				data.status.event_status);
 	}
 exit:
 	mutex_unlock(&em718x->lock);
