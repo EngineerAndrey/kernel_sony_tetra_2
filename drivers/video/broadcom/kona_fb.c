@@ -1129,8 +1129,7 @@ static struct device_attribute panel_attributes[] = {
 	__ATTR(panel_mode, S_IRUGO|S_IWUSR|S_IWGRP,
 					kona_fb_panel_mode_show,
 					kona_fb_panel_mode_store),
-	__ATTR(backlight_brightness, S_IRUGO|S_IWUSR|S_IWGRP,
-					NULL,
+	__ATTR(backlight_brightness, S_IWUSR|S_IWGRP, NULL,
 					kona_fb_backlight_brightness_store),
 
 };
