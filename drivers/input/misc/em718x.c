@@ -697,12 +697,40 @@ static int em718x_set_sensor_rate(struct em718x *em718x,
 	return rc;
 }
 
-#define PARAM_READ_RETRY_NUM 3
+#define PARAM_IO_RETRY_NUM 10
+#define SHORT_WAIT_US 1000
+#define LONG_WAIT_US 9000
+static int wait_for_ack(struct em718x *em718x, u8 ack_val)
+{
+	int i;
+	u8 ack;
+	int rc;
+
+	usleep_range(SHORT_WAIT_US, SHORT_WAIT_US + 500);
+
+	for (i = 0; i < PARAM_IO_RETRY_NUM; i++) {
+		rc = smbus_read_byte(em718x->client,
+				R8_PARAMETER_ACK_REG, &ack);
+		if (rc)
+			goto exit;
+		if (ack == ack_val) {
+			dev_dbg(&em718x->client->dev,
+				"%s: ack 0x%02x in %d attempts\n",
+				__func__, ack, i + 1);
+			goto exit;
+		}
+		usleep_range(LONG_WAIT_US, LONG_WAIT_US + SHORT_WAIT_US);
+	}
+	dev_err(&em718x->client->dev, "%s: NACK: 0x%02x\n", __func__, ack);
+	rc = -EIO;
+exit:
+	return rc;
+}
+
 static int em718x_parameters_read(struct em718x *em718x, u32 *buf, int from,
 	size_t num)
 {
 	int rc;
-	u8 ack;
 
 	rc = smbus_write_byte(em718x->client, R8_PARAMETER_REQ_REG, from);
 	if (rc)
@@ -711,23 +739,10 @@ static int em718x_parameters_read(struct em718x *em718x, u32 *buf, int from,
 	if (rc)
 		return rc;
 	do {
-		int i;
-		for (i = 0; i < PARAM_READ_RETRY_NUM; i++) {
-			usleep_range(5000, 6000);
-			rc = smbus_read_byte(em718x->client,
-					R8_PARAMETER_ACK_REG, &ack);
-			if (rc)
-				goto exit;
-			if (ack == from) {
-				dev_dbg(&em718x->client->dev, "%s: ack %d\n",
-						__func__, i);
-				goto acked;
-			}
-		}
-		dev_err(&em718x->client->dev, "%s: no ack\n", __func__);
-		rc = -EIO;
-		goto exit;
-acked:
+		rc = wait_for_ack(em718x, from);
+		if (rc)
+			goto exit;
+
 		rc = smbus_read_byte_block(em718x->client,
 				R32_PARAMETER_READ_REG, (u8 *)buf,
 				sizeof(*buf));
@@ -745,44 +760,45 @@ exit:
 	return rc;
 }
 
-#define PARAM_LOAD_RETRY_NUM 10
-static int em718x_parameter_load(struct em718x *em718x, u32 val, int addr)
+static int em718x_parameter_load(struct em718x *em718x, u32 *val, int addr,
+	int len)
 {
 	int rc;
-	u8 ack;
-	int i;
 
 	rc = smbus_write_byte_block(em718x->client, R32_PARAMETER_LOAD_REG,
-			(u8 *)&val, sizeof(val));
+			(u8 *)val, sizeof(*val));
 	if (rc)
 		return rc;
 
 	addr |= 1 << 7;
 	rc = smbus_write_byte(em718x->client, R8_PARAMETER_REQ_REG, addr);
 	if (rc)
-		return rc;
+		goto exit;
 
 	rc = smbus_write_byte(em718x->client, R8_ALGO_CTL, 1 << 7);
 	if (rc)
-		return rc;
+		goto exit;
 
-	for (i = 0; i < PARAM_LOAD_RETRY_NUM; i++) {
-		usleep_range(10000, 11000);
-		rc = smbus_read_byte(em718x->client,
-				R8_PARAMETER_ACK_REG, &ack);
+	while (1) {
+		rc = wait_for_ack(em718x, addr);
 		if (rc)
-			goto exit;
+			break;
+		if (--len <= 0)
+			break;
+		val++;
+		rc = smbus_write_byte_block(em718x->client,
+				R32_PARAMETER_LOAD_REG,
+				(u8 *)val, sizeof(*val));
+		if (rc)
+			break;
+		rc = smbus_write_byte(em718x->client,
+				R8_PARAMETER_REQ_REG, ++addr);
+		dev_dbg(&em718x->client->dev, "%s: parrameter %d\n", __func__,
+			addr & 0x7f);
 
-		if (ack == addr) {
-			dev_dbg(&em718x->client->dev,
-				"%s: 0x%08x -> 0x%02x ack 0x%02x\n", __func__,
-				val, addr & 0x7f, ack);
-			goto exit;
-		}
+		if (rc)
+			break;
 	}
-	dev_err(&em718x->client->dev, "%s: 0x%08x -> 0x%02x NACK 0x%02x\n",
-			__func__, val, addr & 0x7f, ack);
-	rc = -EIO;
 exit:
 	(void)smbus_write_byte(em718x->client, R8_ALGO_CTL, em718x->algo_ctl);
 	(void)smbus_write_byte(em718x->client, R8_PARAMETER_REQ_REG, 0);
@@ -800,14 +816,10 @@ static void exec_parameters_transfer(struct em718x *em718x)
 	}
 	if (em718x->parameter_w.pending) {
 		int rc;
-		int i;
-		for (i = 0; i < em718x->parameter_w.num; i++) {
-			rc = em718x_parameter_load(em718x,
-					em718x->parameter_w.buf[i],
-					em718x->parameter_w.pos + i);
-			if (rc)
-				break;
-		}
+
+		rc = em718x_parameter_load(em718x, em718x->parameter_w.buf,
+				em718x->parameter_w.pos,
+				em718x->parameter_w.num);
 		em718x->parameter_w.num = rc;
 		em718x->parameter_w.pending = false;
 	}
@@ -1986,8 +1998,8 @@ static int em718x_parameters_apply(struct em718x *em718x)
 	for (i = 0; i < em718x->dts_parameters_num; i++) {
 		for (n = 0; n < 2; n++) {
 			rc = em718x_parameter_load(em718x,
-					em718x->dts_parameters[i].val,
-					em718x->dts_parameters[i].addr);
+					&em718x->dts_parameters[i].val,
+					em718x->dts_parameters[i].addr, 1);
 			if (!rc)
 				break;
 		}
