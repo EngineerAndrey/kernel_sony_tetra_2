@@ -622,8 +622,7 @@ static int em718x_parameters_read(struct em718x *em718x, u32 *buf, int from,
 	rc = smbus_write_byte(em718x->client, R8_PARAMETER_REQ_REG, from);
 	if (rc)
 		return rc;
-	em718x->algo_ctl |= 1 << 7;
-	rc = smbus_write_byte(em718x->client, R8_ALGO_CTL, em718x->algo_ctl);
+	rc = smbus_write_byte(em718x->client, R8_ALGO_CTL, 1 << 7);
 	if (rc)
 		return rc;
 	do {
@@ -641,6 +640,7 @@ static int em718x_parameters_read(struct em718x *em718x, u32 *buf, int from,
 			}
 		}
 		dev_err(&em718x->client->dev, "%s: no ack\n", __func__);
+		rc = -EIO;
 		goto exit;
 acked:
 		rc = smbus_read_byte_block(em718x->client,
@@ -655,7 +655,6 @@ acked:
 			goto exit;
 	} while (--num);
 exit:
-	em718x->algo_ctl &= ~(1 << 7);
 	(void)smbus_write_byte(em718x->client, R8_ALGO_CTL, em718x->algo_ctl);
 	(void)smbus_write_byte(em718x->client, R8_PARAMETER_REQ_REG, 0);
 	return rc;
@@ -678,8 +677,7 @@ static int em718x_parameter_load(struct em718x *em718x, u32 val, int addr)
 	if (rc)
 		return rc;
 
-	em718x->algo_ctl |= 1 << 7;
-	rc = smbus_write_byte(em718x->client, R8_ALGO_CTL, em718x->algo_ctl);
+	rc = smbus_write_byte(em718x->client, R8_ALGO_CTL, 1 << 7);
 	if (rc)
 		return rc;
 
@@ -701,7 +699,6 @@ static int em718x_parameter_load(struct em718x *em718x, u32 val, int addr)
 			__func__, val, addr & 0x7f, ack);
 	rc = -EIO;
 exit:
-	em718x->algo_ctl &= ~(1 << 7);
 	(void)smbus_write_byte(em718x->client, R8_ALGO_CTL, em718x->algo_ctl);
 	(void)smbus_write_byte(em718x->client, R8_PARAMETER_REQ_REG, 0);
 	return rc;
@@ -757,7 +754,7 @@ static ssize_t parameters_bin_read(struct file *data_file,
 	wait_event_interruptible(em718x->control_wq,
 			!em718x->control_pending);
 
-	if (em718x->parameter_r.num > 0)
+	if (!em718x->parameter_r.num)
 		memcpy(buf, em718x->parameter_r.buf, count);
 	return em718x->parameter_r.num < 0 ? em718x->parameter_r.num : count;
 }
@@ -791,7 +788,7 @@ static struct bin_attribute parameter_bin_data = {
 		.name = "parameters",
 		.mode = S_IRUGO | S_IWUSR,
 	},
-	.size = 127,
+	.size = 127 * sizeof(u32),
 	.read = parameters_bin_read,
 	.write = parameters_bin_write,
 };
