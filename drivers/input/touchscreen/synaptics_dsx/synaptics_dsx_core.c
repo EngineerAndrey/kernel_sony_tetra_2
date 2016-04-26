@@ -67,6 +67,7 @@
 #define MAX_F11_TOUCH_WIDTH 15
 
 #define CHECK_STATUS_TIMEOUT_MS 100
+#define BLOCK_PALM_DETECT_TIMEOUT_MS 200
 
 #define F01_STD_QUERY_LEN 21
 #define F01_BUID_ID_OFFSET 18
@@ -895,6 +896,15 @@ static ssize_t synaptics_rmi4_poll_store(struct device *dev,
 	return count;
 }
 
+static void wg_timer_cb(unsigned long data)
+{
+	struct synaptics_rmi4_data *rmi4_data =
+					(struct synaptics_rmi4_data*)data;
+	dev_dbg(rmi4_data->pdev->dev.parent, "%s: jiffies %ld.\n",
+							__func__, jiffies);
+	rmi4_data->wg_block_sleep = false;
+}
+
 static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 		struct synaptics_rmi4_fn *fhandler)
 {
@@ -954,6 +964,16 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 			input_sync(rmi4_data->input_dev);
 			rmi4_data->wg_sent = true;
 			rmi4_data->wg_block_until_no_finger = true;
+			rmi4_data->wg_block_sleep = true;
+			setup_timer(&rmi4_data->wg_timer, wg_timer_cb,
+						(unsigned long)rmi4_data);
+			if (mod_timer(&rmi4_data->wg_timer,
+					jiffies + msecs_to_jiffies(
+					BLOCK_PALM_DETECT_TIMEOUT_MS))) {
+				dev_err(rmi4_data->pdev->dev.parent,
+						"Failed to start timer\n");
+				rmi4_data->wg_block_sleep = false;
+			}
 		}
 		return 0;
 	}
@@ -979,7 +999,7 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 		rmi4_data->wg_block_until_no_finger = false;
 	}
 
-	if (rmi4_data->has_large_obj_det) {
+	if (rmi4_data->has_large_obj_det && !rmi4_data->wg_block_sleep) {
 		retval = synaptics_rmi4_reg_read(rmi4_data,
 				rmi4_data->f11_data_28,
 				&data28, sizeof(data28));
