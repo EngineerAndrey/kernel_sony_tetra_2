@@ -22,6 +22,25 @@
 
 #define NT35310_BROOKS_UPDT_WIN_SEQ_LEN 13 /* (6 + 6 + 1) */
 
+#define CORNER_TOP	 1
+#define CORNER_BOTTOM	-1
+#define CORNER_LEFT	 1
+#define CORNER_RIGHT	-1
+
+/*
+ * Each scan line must end with 0xFF
+ * The first number in a line specifies how many black pixels should be drawn,
+ * even if it's 0.
+ */
+#define CORNER_DATA_SIZE 47
+static const uint8_t corner_data[CORNER_DATA_SIZE] =
+{
+	0x08, 0x17, 0x60, 0xA8, 0xCA, 0xEF, 0xFF, 0x06, 0x37, 0xDE, 0xFF, 0x04,
+	0x05, 0xB1, 0xFF, 0x03, 0x0D, 0xDA, 0xFF, 0x02, 0x05, 0xDE, 0xFF, 0x02,
+	0xA9, 0xFF, 0x01, 0x2E, 0xFF, 0x01, 0xD1, 0xFF, 0x00, 0x17, 0xFF, 0x00,
+	0x5D, 0xFF, 0x00, 0xA6, 0xFF, 0x00, 0xD1, 0xFF, 0x00, 0xF3, 0xFF
+};
+
 __initdata struct DSI_COUNTER nt35310_brooks_timing[] = {
 	/* LP Data Symbol Rate Calc - MUST BE FIRST RECORD */
 	{"ESC2LP_RATIO", DSI_C_TIME_ESC2LPDT, 0,
@@ -653,6 +672,54 @@ void nt35310_brooks_convert_fb_from_special_mode(char *fb, uint32_t width,
 	konafb_debug("%s-\n", __func__);
 }
 
+void nt35310_brooks_draw_one_corner(char *fb, uint32_t width, uint32_t height,
+				uint32_t bpp, int8_t dx, int8_t dy)
+{
+	char *pixel_base = 0;
+	uint16_t i = 0;
+	uint16_t x = (dx == CORNER_LEFT) ? 0 : width - 1;
+	uint16_t y = (dy == CORNER_TOP)  ? 0 : height - 1;
+
+	do {
+		// last pixel in line
+		if (corner_data[i] == 0xFF) {
+			x = (dx == CORNER_LEFT) ? 0 : width - 1;
+			y += dy;
+			continue;
+
+		// first pixel in line (= number of black pixels)
+		} else if ((i == 0) || (corner_data[i - 1] == 0xFF)) {
+			memset(fb + (y * width + x -
+				(dx == CORNER_RIGHT ? corner_data[i] - 1 : 0)) *
+				bpp / 8, 0, corner_data[i] * bpp / 8);
+
+			x += corner_data[i] * dx;
+
+			continue;
+		}
+
+		pixel_base = fb + (y * width + x) * bpp / 8;
+		*(pixel_base + 0) = (*(pixel_base + 0) * corner_data[i]) >> 8;
+		*(pixel_base + 1) = (*(pixel_base + 1) * corner_data[i]) >> 8;
+		*(pixel_base + 2) = (*(pixel_base + 2) * corner_data[i]) >> 8;
+
+		x += dx;
+	} while (++i < CORNER_DATA_SIZE - 1);
+}
+
+void nt35310_brooks_draw_corners(char *fb, uint32_t width, uint32_t height,
+				uint32_t bpp)
+{
+	nt35310_brooks_draw_one_corner(fb, width, height, bpp,
+					CORNER_LEFT, CORNER_TOP);
+	nt35310_brooks_draw_one_corner(fb, width, height, bpp,
+					CORNER_RIGHT, CORNER_TOP);
+	nt35310_brooks_draw_one_corner(fb, width, height, bpp,
+					CORNER_LEFT, CORNER_BOTTOM);
+	nt35310_brooks_draw_one_corner(fb, width, height, bpp,
+					CORNER_RIGHT, CORNER_BOTTOM);
+}
+
 __initdata struct lcd_config nt35310_brooks_cfg = {
 	.name = "NT35310_Brooks",
 	.mode_supp = LCD_CMD_ONLY,
@@ -691,6 +758,7 @@ __initdata struct lcd_config nt35310_brooks_cfg = {
 	.special_mode_off_cmd_seq = &nt35310_brooks_idle_mode_off[0],
 	.fb_to_special_mode = nt35310_brooks_convert_fb_to_special_mode,
 	.fb_from_special_mode = nt35310_brooks_convert_fb_from_special_mode,
+	.draw_corners = &nt35310_brooks_draw_corners,
 	.clear_ram_row_start = 1,
 	.clear_ram_row_end = 480,
 	.clear_panel_ram = true,

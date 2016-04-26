@@ -96,6 +96,8 @@
 
 #define SUSPEND_LINK_DELAY_MS 100
 
+static bool enable_corners = true;
+
 static struct pi_mgr_qos_node g_mm_qos_node;
 
 #ifdef CONFIG_FB_BRCM_CP_CRASH_DUMP_IMAGE_SUPPORT
@@ -865,6 +867,15 @@ static int kona_fb_pan_display(struct fb_var_screeninfo *var,
 					__func__, __LINE__);
 			kona_clock_start(fb);
 		}
+
+		if (enable_corners && fb->display_info->draw_corners) {
+			char *buff_base = fb->fb.screen_base +
+				(buff_idx ? (fb->buff1 - fb->buff0) : 0);
+			fb->display_info->draw_corners(buff_base,
+					fb->fb.var.xres, fb->fb.var.yres,
+					var->bits_per_pixel);
+		}
+
 		if (fb->display_info->special_mode_on &&
 					fb->display_info->fb_to_special_mode) {
 			char *fb_start = var->yoffset ? fb->fb.screen_base +
@@ -2333,6 +2344,8 @@ static int __init populate_dispdrv_cfg(struct kona_fb *fb,
 				__func__, __LINE__, info->special_mode_on);
 	}
 
+	info->draw_corners = cfg->draw_corners;
+
 	info->cabc_enabled = cfg->cabc_enabled;
 	if (info->cabc_enabled) {
 		info->cabc_init_seq = get_seq(cfg->cabc_init_seq);
@@ -2997,6 +3010,8 @@ static void __exit kona_fb_exit(void)
 
 module_init(kona_fb_init);
 module_exit(kona_fb_exit);
+
+module_param(enable_corners, bool, 0644);
 
 MODULE_AUTHOR("Broadcom");
 MODULE_DESCRIPTION("KONA FB Driver");

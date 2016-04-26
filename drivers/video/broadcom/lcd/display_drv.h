@@ -135,6 +135,8 @@ extern "C" {
 		void (*fb_from_special_mode)(char *fb, uint32_t nbr_pix_w,
 					uint32_t nbr_pix_h, uint32_t bytespp);
 		bool fb_converted_to_special_mode;
+		void (*draw_corners)(char *fb, uint32_t width, uint32_t height,
+					uint32_t bpp);
 		uint32_t brightness;
 		char *special_mode_on_seq;
 		char *special_mode_off_seq;
