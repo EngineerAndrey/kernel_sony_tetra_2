@@ -130,6 +130,11 @@ extern "C" {
 		bool special_mode_panel;
 		bool special_mode_on;
 		bool delayed_special_mode;
+		void (*fb_to_special_mode)(char *fb, uint32_t nbr_pix_w,
+					uint32_t nbr_pix_h, uint32_t bytespp);
+		void (*fb_from_special_mode)(char *fb, uint32_t nbr_pix_w,
+					uint32_t nbr_pix_h, uint32_t bytespp);
+		bool fb_converted_to_special_mode;
 		uint32_t brightness;
 		char *special_mode_on_seq;
 		char *special_mode_off_seq;

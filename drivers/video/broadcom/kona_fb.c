@@ -865,6 +865,15 @@ static int kona_fb_pan_display(struct fb_var_screeninfo *var,
 					__func__, __LINE__);
 			kona_clock_start(fb);
 		}
+		if (fb->display_info->special_mode_on &&
+					fb->display_info->fb_to_special_mode) {
+			char *fb_start = var->yoffset ? fb->fb.screen_base +
+				(fb->buff1 - fb->buff0) : fb->fb.screen_base;
+			fb->display_info->fb_to_special_mode(fb_start,
+					fb->fb.var.xres, fb->fb.var.yres,
+					fb->display_info->Bpp);
+			fb->display_info->fb_converted_to_special_mode = true;
+		}
 		ret =
 		    fb->display_ops->update(fb->display_hdl,
 					buff_idx ? fb->buff1 : fb->buff0,
@@ -944,6 +953,17 @@ static void set_special_mode(struct kona_fb *fb) {
 	kona_clock_start(fb);
 	if (fb->display_info->cabc_enabled)
 		panel_write(fb->display_info->cabc_off_seq);
+	if (fb->display_info->fb_to_special_mode &&
+			!fb->display_info->fb_converted_to_special_mode) {
+		char *fb_start = fb->fb.var.yoffset ? fb->fb.screen_base +
+				(fb->buff1 - fb->buff0) : fb->fb.screen_base;
+		fb->display_info->fb_to_special_mode(fb_start, fb->fb.var.xres,
+					fb->fb.var.yres, fb->display_info->Bpp);
+		fb->display_info->fb_converted_to_special_mode = true;
+		fb->display_ops->update(fb->display_hdl,
+				fb->fb.var.yoffset ? fb->buff1 : fb->buff0,
+				NULL, NULL);
+	}
 	panel_write(fb->display_info->special_mode_on_seq);
 	kona_clock_stop(fb);
 	fb->suspend_link = true;
@@ -1021,10 +1041,13 @@ static ssize_t kona_fb_panel_mode_store(struct device *dev,
 	konafb_info("panel mode %i\n", val);
 	mutex_lock(&fb->update_sem);
 	if (val) {
-		if (fb->display_info->brightness != 0)
+		if (fb->display_info->brightness != 0) {
+			konafb_debug("%s: delay special mode\n", __func__);
 			fb->display_info->delayed_special_mode = true;
-		else
+		} else {
+			konafb_debug("%s: set special mode NOW!\n", __func__);
 			set_special_mode(fb);
+		}
 	} else {
 		/* Exit special mode */
 		if (fb->blank_state == KONA_FB_BLANK) {
@@ -1043,6 +1066,19 @@ static ssize_t kona_fb_panel_mode_store(struct device *dev,
 			link_control(fb, RESUME_LINK);
 		complete(&g_kona_fb->prev_buf_done_sem);
 		kona_clock_start(fb);
+		if (fb->display_info->fb_converted_to_special_mode &&
+				fb->display_info->fb_from_special_mode) {
+			char *fb_start = fb->fb.var.yoffset ?
+				fb->fb.screen_base + (fb->buff1 - fb->buff0) :
+				fb->fb.screen_base;
+			fb->display_info->fb_from_special_mode(fb_start,
+					fb->fb.var.xres, fb->fb.var.yres,
+					fb->display_info->Bpp);
+			fb->display_info->fb_converted_to_special_mode = false;
+			fb->display_ops->update(fb->display_hdl,
+				fb->fb.var.yoffset ? fb->buff1 : fb->buff0,
+				NULL, NULL);
+		}
 		panel_write(fb->display_info->special_mode_off_seq);
 		if (fb->display_info->cabc_enabled)
 			panel_write(fb->display_info->cabc_on_seq);
@@ -2290,6 +2326,8 @@ static int __init populate_dispdrv_cfg(struct kona_fb *fb,
 			goto err_special_mode_seq;
 		info->special_mode_on = cfg->special_mode_on;
 		info->special_mode_panel = cfg->special_mode_panel;
+		info->fb_to_special_mode = cfg->fb_to_special_mode;
+		info->fb_from_special_mode = cfg->fb_from_special_mode;
 		pr_info("%s(%d): Panel special mode: %d\n",
 				__func__, __LINE__, info->special_mode_on);
 	}

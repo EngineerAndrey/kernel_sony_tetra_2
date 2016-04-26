@@ -61,6 +61,10 @@ struct lcd_config {
 	DISPCTRL_REC_T *id_seq;
 	DISPCTRL_REC_T *special_mode_on_cmd_seq; /* Panel special mode */
 	DISPCTRL_REC_T *special_mode_off_cmd_seq; /* Panel normal mode */
+	void (*fb_to_special_mode)(char *fb, uint32_t nbr_pix_w,
+					uint32_t nbr_pix_h, uint32_t bytespp);
+	void (*fb_from_special_mode)(char *fb, uint32_t nbr_pix_w,
+					uint32_t nbr_pix_h, uint32_t bytespp);
 	DISPCTRL_REC_T *cabc_init_seq;
 	DISPCTRL_REC_T *cabc_on_seq;
 	DISPCTRL_REC_T *cabc_off_seq;
