@@ -310,6 +310,7 @@ enum sensor_type {
 	SENSOR_TYPE_TILT_WRIST,
 	SENSOR_TYPE_STATUS,
 	SENSOR_TYPE_CALSCORE,
+	SENSOR_TYPE_REBOOT,
 	SENSOR_TYPE_WAKE_UP = 1 << 4,
 	SENSOR_FLUSH_COMPLETE = 1 << 5,
 };
@@ -2009,6 +2010,16 @@ static int em718x_parameters_apply(struct em718x *em718x)
 	return 0;
 }
 
+static void send_reboot_complete(struct em718x *em718x, int err_code)
+{
+	struct sensor_event ev;
+	ev.type = SENSOR_TYPE_REBOOT;
+	ev.time = ktime_to_ns(ktime_get_boottime());
+	ev.d[0] = err_code;
+	em718x_queue_event(em718x, &ev);
+	wake_up_interruptible(&em718x->ev_device.wq);
+}
+
 static void em718x_reset_work_func(struct work_struct *work)
 {
 	struct delayed_work *dw = container_of(work, struct delayed_work,
@@ -2053,6 +2064,7 @@ static void em718x_reset_work_func(struct work_struct *work)
 	wait_event_interruptible(em718x->control_wq,
 			!em718x->control_pending);
 	dev_info(dev, "reset finished with no errors\n");
+	send_reboot_complete(em718x, 0);
 	return;
 
 exit_rescheduled:
@@ -2062,6 +2074,7 @@ exit:
 	(void)em718x_host_ctl(em718x, 0);
 	dev_info(dev, "reset finished with errors, device in shutdown state\n");
 	mutex_unlock(&em718x->lock);
+	send_reboot_complete(em718x, -1);
 	return;
 }
 
