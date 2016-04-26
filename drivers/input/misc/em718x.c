@@ -1307,7 +1307,7 @@ static void em718x_wakeup_work_func(struct work_struct *work)
 	mutex_unlock(&p->lock);
 }
 
-#define STREAMING_EV_WAKE_DELAY 50
+#define STREAMING_EV_WAKE_DELAY 30
 static void em718x_queue_event(struct em718x *em718x, struct sensor_event *ev)
 {
 	struct event_device *ev_dev = &em718x->ev_device;
