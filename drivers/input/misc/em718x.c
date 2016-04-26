@@ -1427,6 +1427,7 @@ static void drain_fifo(struct em718x *em718x)
 		}
 		if (first || (sample_seq_no != (acc.t & 0xff))) {
 
+			first = false;
 			sample_seq_no = acc.t & 0xff;
 			samples_left = acc.t >> 8;
 
