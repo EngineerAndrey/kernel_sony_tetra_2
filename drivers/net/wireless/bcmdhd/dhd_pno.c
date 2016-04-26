@@ -342,16 +342,13 @@ _dhd_pno_add_ssid(dhd_pub_t *dhd, wlc_ssid_t* ssids_list, int nssid)
 				ssids_list[j].SSID, ssids_list[j].SSID_len));
 		}
 	}
-	/* Check for broadcast ssid */
-	for (i = 0; i < nssid; i++) {
-		if (!ssids_list[i].SSID_len) {
-			DHD_ERROR(("%d: Broadcast SSID is ilegal for PNO setting\n", i));
-			err = BCME_ERROR;
-			goto exit;
-		}
-	}
+
 	/* set all pfn ssid */
 	for (i = 0; i < nssid; i++) {
+		if (!ssids_list[i].SSID_len) {
+			DHD_INFO(("%d: Skiping broadcast SSID\n", i));
+			continue;
+		}
 		pfn_element.infra = htod32(DOT11_BSSTYPE_INFRASTRUCTURE);
 		pfn_element.auth = (DOT11_OPEN_SYSTEM);
 		pfn_element.wpa_auth = htod32(WPA_AUTH_PFN_ANY);
