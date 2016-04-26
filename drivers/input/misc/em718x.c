@@ -320,19 +320,19 @@ struct sensor_event {
 	int64_t time;
 };
 
-#define ACC_EV_BUF_SUZE (FIFO_SIZE_MAX + FIFO_SIZE_MAX / 10)
-#define GYRO_EV_BUF_SUZE 16
-#define MAG_EV_BUF_SUZE 16
-#define QUAT_EV_BUF_SUZE 16
-#define STEP_EV_BUF_SUZE 1
-#define TILT_EV_BUF_SUZE 2
-#define AMD_EV_BUF_SUZE 2
+#define ACC_EV_BUF_SIZE (FIFO_SIZE_MAX + FIFO_SIZE_MAX / 10)
+#define GYRO_EV_BUF_SIZE 16
+#define MAG_EV_BUF_SIZE 16
+#define QUAT_EV_BUF_SIZE 16
+#define STEP_EV_BUF_SIZE 1
+#define TILT_EV_BUF_SIZE 2
+#define AMD_EV_BUF_SIZE 2
 
-#define EVENT_Q_SIZE (ACC_EV_BUF_SUZE + GYRO_EV_BUF_SUZE +\
-			MAG_EV_BUF_SUZE + QUAT_EV_BUF_SUZE +\
-			STEP_EV_BUF_SUZE)
+#define EVENT_Q_SIZE (ACC_EV_BUF_SIZE + GYRO_EV_BUF_SIZE +\
+			MAG_EV_BUF_SIZE + QUAT_EV_BUF_SIZE +\
+			STEP_EV_BUF_SIZE)
 
-#define WAKE_EVENT_Q_SIZE (TILT_EV_BUF_SUZE + AMD_EV_BUF_SUZE)
+#define WAKE_EVENT_Q_SIZE (TILT_EV_BUF_SIZE + AMD_EV_BUF_SIZE)
 
 struct sensor_event_queue {
 	int ridx;
@@ -366,6 +366,11 @@ struct parameter_transfer {
 	bool pending;
 };
 
+
+struct acc_fifo_data {
+	s16 data[3];
+};
+
 struct em718x {
 	struct i2c_client *client;
 	int irq_gpio;
@@ -388,6 +393,11 @@ struct em718x {
 	u8 status_reported;
 	s64 irq_time;
 	s64 last_samle_t;
+
+	s64 acc_prev_t;
+	struct acc_fifo_data *acc_buf;
+	int acc_buf_i;
+
 	u32 acc_rate_ns;
 	u8 mcal_status;
 	struct sensor_request sns_req[SNS_CNT];
@@ -1293,28 +1303,68 @@ static void em718x_queue_event_wake(struct em718x *em718x,
 	wake_up_interruptible(&ev_dev->wq);
 }
 
+static void acc_data_buf_push(struct em718x *em718x, s16 *data)
+{
+	struct acc_fifo_data *acc_buf = em718x->acc_buf;
+	if (em718x->acc_buf_i < ACC_EV_BUF_SIZE) {
+		acc_buf[em718x->acc_buf_i].data[0] = data[0];
+		acc_buf[em718x->acc_buf_i].data[1] = data[1];
+		acc_buf[em718x->acc_buf_i].data[2] = data[2];
+		em718x->acc_buf_i++;
+	}
+}
+
+static void acc_data_buf_flush(struct em718x *em718x)
+{
+	if (em718x->acc_buf_i) {
+		int i;
+		struct sensor_event ev;
+		struct device *dev = &em718x->client->dev;
+		s64 rate = em718x->acc_rate_ns;
+		s64 now = ktime_to_ns(ktime_get_boottime());
+		s64 prev_t = em718x->acc_prev_t;
+		s64 t = now - rate * (em718x->acc_buf_i - 1);
+
+		if (t < prev_t + rate) {
+			s64 diff = now - prev_t;
+			s32 ldiff = diff >> 10;
+			rate = (ldiff / em718x->acc_buf_i) << 10;
+			t = prev_t + rate;
+		}
+		dev_dbg(dev,
+		"%s: %d samples, now %lld, prev %lld, t %lld, rate %lld\n",
+			__func__, em718x->acc_buf_i, now, prev_t, t, rate);
+
+		ev.type = SENSOR_TYPE_ACC;
+		for (i = 0; i < em718x->acc_buf_i; i++, t += rate) {
+			ev.time = t;
+			ev.d[0] = em718x->acc_buf[i].data[0];
+			ev.d[1] = em718x->acc_buf[i].data[1];
+			ev.d[2] = -em718x->acc_buf[i].data[2];
+			em718x_queue_event(em718x, &ev);
+		}
+		em718x->acc_prev_t = t;
+
+		ev.type |= SENSOR_FLUSH_COMPLETE;
+		em718x_queue_event(em718x, &ev);
+	}
+}
+
 static void drain_fifo(struct em718x *em718x)
 {
 	struct device *dev = &em718x->client->dev;
 	bool first;
-	int samples;
-	s64 irq_t;
 	u16 samples_left;
 	u16 sample_seq_no;
-	struct sensor_event ev;
-	s64 ns = em718x->acc_rate_ns;
-	int ev_type;
 
 	dev_dbg(dev, "%s: enter\n", __func__);
 
-	irq_t = em718x->irq_time;
+	em718x->acc_buf_i = 0;
+
 	em718x->algo_ctl |= 1 << 7;
-	ev_type = SENSOR_TYPE_ACC |
-		(!!(em718x->suspend_enabled_sns & (1 << SNS_ACC)) ?
-		SENSOR_TYPE_WAKE_UP : 0);
 	(void)smbus_write_byte(em718x->client, R8_ALGO_CTL, em718x->algo_ctl);
 
-	for (first = true, samples = 0;;) {
+	for (first = true;; ) {
 		struct data_3d acc;
 
 		if (big_block_read(em718x->client, RX_ACC_DATA,
@@ -1323,17 +1373,9 @@ static void drain_fifo(struct em718x *em718x)
 
 		if (!acc.t || !enabled(em718x, SNS_ACC) ||
 					!em718x->sns_state[SNS_ACC].fifo_size) {
-			if (samples) {
-				ev.type = SENSOR_TYPE_ACC |
-						SENSOR_FLUSH_COMPLETE;
-				em718x_queue_event(em718x, &ev);
-				dev_dbg(dev,
-					"acc flush complete, %d samples\n",
-					samples);
-			}
+			acc_data_buf_flush(em718x);
 			break;
 		}
-
 		if (first || (sample_seq_no != (acc.t & 0xff))) {
 
 			sample_seq_no = acc.t & 0xff;
@@ -1343,34 +1385,10 @@ static void drain_fifo(struct em718x *em718x)
 				dev_warn(dev, "%s: samples_left=0", __func__);
 				goto skip;
 			}
-
-			if (first) {
-				first = false;
-				irq_t = irq_t - (samples_left - 1) * ns;
-				if (irq_t < em718x->last_samle_t + ns) {
-
-					long ns8 = (em718x->irq_time -
-						em718x->last_samle_t) >> 8;
-					ns8 = ns8 / samples_left;
-					ns = (s64)ns8 << 8;
-					irq_t = ns + em718x->last_samle_t;
-				}
-			}
-
-			em718x->last_samle_t = irq_t;
-
-			dev_vdbg(dev, "acc[%u, %u, %lld] %d, %d, %d\n",
-					sample_seq_no, samples_left, irq_t,
+			dev_vdbg(dev, "acc[%u, %u] %d, %d, %d\n",
+					sample_seq_no, samples_left,
 					acc.x, acc.y, -acc.z);
-			irq_t += ns;
-			samples++;
-
-			ev.type = ev_type;
-			ev.time = irq_t;
-			ev.d[0] = acc.x;
-			ev.d[1] = acc.y;
-			ev.d[2] = -acc.z;
-			em718x_queue_event(em718x, &ev);
+			acc_data_buf_push(em718x, acc.data);
 		}
 skip:
 		smbus_write_byte(em718x->client, R8_FIFO_ACK_REG, 0);
@@ -1394,6 +1412,7 @@ static void em718x_process_amgf(struct em718x *em718x,
 		} else {
 			dev_vdbg(dev, "acc[%u] %d, %d, %d\n", amgf->acc.t,
 					amgf->acc.x, amgf->acc.y, -amgf->acc.z);
+			em718x->acc_prev_t = ev.time;
 			ev.type = SENSOR_TYPE_ACC;
 			ev.d[0] = amgf->acc.x;
 			ev.d[1] = amgf->acc.y;
@@ -2200,6 +2219,10 @@ static int em718x_probe(struct i2c_client *client,
 	}
 	em718x = devm_kzalloc(dev, sizeof(*em718x), GFP_KERNEL);
 	if (!em718x)
+		return -ENOMEM;
+	em718x->acc_buf = devm_kzalloc(dev,
+			ACC_EV_BUF_SIZE * sizeof(*em718x->acc_buf), GFP_KERNEL);
+	if (!em718x->acc_buf)
 		return -ENOMEM;
 
 	i2c_set_clientdata(client, em718x);
