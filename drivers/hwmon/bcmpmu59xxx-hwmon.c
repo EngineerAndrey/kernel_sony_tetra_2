@@ -285,7 +285,18 @@ int read_rtm_adc(struct bcmpmu59xxx *bcmpmu, enum bcmpmu_adc_channel channel,
 		goto err;
 	}
 
-	wait_for_completion(&adc->rtm_ready_complete);
+	/* the caller hits BUG on the 10th retry. */ 
+	if (!(wait_for_completion_timeout(&adc->rtm_ready_complete, HZ * 1))) {
+		pr_hwmon(ERROR, "%s [RTM] completion timout\n",__func__);
+		if (bcmpmu->read_dev(bcmpmu, PMU_REG_INT9, &val))
+			pr_hwmon(ERROR, "%s I2C read PMU_REG_INT9 failed\n", __func__);
+		pr_hwmon(ERROR, "%s PMU_REG_INT9=0x%X\n",__func__, val);
+		if (bcmpmu->read_dev(bcmpmu, PMU_REG_INT9MSK, &val))
+			pr_hwmon(ERROR, "%s I2C read PMU_REG_INT9MSK failed\n", __func__);
+		pr_hwmon(ERROR, "%s PMU_REG_INT9MSK=0x%X\n",__func__, val);
+		ret = -EAGAIN;
+		goto err;
+	}
 
 	if ((adc->int_status == PMU_IRQ_RTM_UPPER) ||
 		(adc->int_status ==  PMU_IRQ_RTM_OVERRIDDEN)){
