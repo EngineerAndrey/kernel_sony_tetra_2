@@ -584,6 +584,75 @@ void nt35310_brooks_winset(char *msgData, DISPDRV_WIN_t *p_win)
 		pr_err("nt35310_winset msg len incorrect!\n");
 }
 
+void nt35310_brooks_convert_fb_to_special_mode(char *fb, uint32_t width,
+						uint32_t height, uint32_t bpp) {
+	uint32_t i, new_pix, gray;
+	uint32_t *curr_pix;
+
+	konafb_debug("%s+\n", __func__);
+	if (!fb) {
+		pr_err("%s: no fb\n", __func__);
+		return;
+	}
+	if (bpp != 4) {
+		pr_err("%s: Only bpp = 4 suported (bpp = %d)\n", __func__, bpp);
+		return;
+	}
+
+	curr_pix = (uint32_t*)fb;
+	for (i = 0; i < height * width; i++) {
+		// Using luminosity model: 0.21 R + 0.72 G + 0.07 B
+		// --> 54 R + 184 G + 18 B
+		gray = (18 * ((*curr_pix & 0x00FF0000) >> 16) +
+			184 * ((*curr_pix & 0x0000FF00) >> 8) +
+			54 * (*curr_pix & 0x000000FF)) >> 8;
+		if (gray > 192)
+			new_pix = 0xFFFFFFFF;
+		else if (gray > 128)
+			new_pix = 0xFFFFFF00;
+		else if (gray > 64)
+			new_pix = 0xFF00FF00;
+		else
+			new_pix = 0xFF000000;
+		*curr_pix = new_pix;
+		curr_pix++;
+	}
+	konafb_debug("%s-\n", __func__);
+}
+
+void nt35310_brooks_convert_fb_from_special_mode(char *fb, uint32_t width,
+						uint32_t height, uint32_t bpp) {
+	uint32_t i, new_pix;
+	uint32_t *curr_pix;
+
+	konafb_debug("%s+\n", __func__);
+	if (!fb) {
+		pr_err("%s: no fb\n", __func__);
+		return;
+	}
+	if (bpp != 4) {
+		pr_err("%s: Only bpp = 4 suported (bpp = %d)\n", __func__, bpp);
+		return;
+	}
+
+	curr_pix = (uint32_t*)fb;
+	for (i = 0; i < height * width; i++) {
+		if (*curr_pix == 0xFFFFFFFF)
+			new_pix = 0xFFFFFFFF;  /* gray 255 */
+		else if (*curr_pix == 0xFFFFFF00)
+			new_pix = 0xFFA0A0A0; /* gray 160 */
+		else if (*curr_pix == 0xFF00FF00)
+			new_pix = 0xFF606060; /* gray 96 */
+		else
+			// Wrong curr_pix format should not happen.
+			// Set to 0 if that happens
+			new_pix = 0xFF000000; /* gray 0 */
+		*curr_pix = new_pix;
+		curr_pix++;
+	}
+	konafb_debug("%s-\n", __func__);
+}
+
 __initdata struct lcd_config nt35310_brooks_cfg = {
 	.name = "NT35310_Brooks",
 	.mode_supp = LCD_CMD_ONLY,
@@ -620,6 +689,8 @@ __initdata struct lcd_config nt35310_brooks_cfg = {
 	.special_mode_on = false,
 	.special_mode_on_cmd_seq = &nt35310_brooks_idle_mode_on[0],
 	.special_mode_off_cmd_seq = &nt35310_brooks_idle_mode_off[0],
+	.fb_to_special_mode = nt35310_brooks_convert_fb_to_special_mode,
+	.fb_from_special_mode = nt35310_brooks_convert_fb_from_special_mode,
 	.clear_ram_row_start = 1,
 	.clear_ram_row_end = 480,
 	.clear_panel_ram = true,
