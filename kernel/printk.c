@@ -49,6 +49,7 @@
 #include <linux/utsname.h>
 
 #include <asm/uaccess.h>
+#include <asm/cacheflush.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/printk.h>
@@ -369,6 +370,7 @@ static void log_store(int facility, int level,
 
 		/* drop old messages until we have enough contiuous space */
 		log_first_idx = log_next(log_first_idx);
+		__cpuc_flush_dcache_area(&log_first_idx, sizeof(log_first_idx));
 		log_first_seq++;
 	}
 
@@ -380,6 +382,7 @@ static void log_store(int facility, int level,
 		 */
 		memset(log_buf + log_next_idx, 0, sizeof(struct log));
 		log_next_idx = 0;
+		__cpuc_flush_dcache_area(&log_next_idx, sizeof(log_next_idx));
 	}
 
 	/* fill message */
@@ -407,6 +410,7 @@ static void log_store(int facility, int level,
 
 	/* insert message */
 	log_next_idx += msg->len;
+	__cpuc_flush_dcache_area(&log_next_idx, sizeof(log_next_idx));
 	log_next_seq++;
 }
 
